@@ -19,7 +19,7 @@ _notification_task: asyncio.Task | None = None
 
 async def main():
     global _notification_task
-    
+
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN is not set")
         return
@@ -29,9 +29,11 @@ async def main():
     dp.include_router(router)
 
     logger.info("Starting bot...")
-    
+
     # Start notification background task
-    _notification_task = asyncio.create_task(notification_loop(bot, interval=NOTIFICATION_INTERVAL))
+    _notification_task = asyncio.create_task(
+        notification_loop(bot, interval=NOTIFICATION_INTERVAL)
+    )
     logger.info(f"Notification loop started (interval: {NOTIFICATION_INTERVAL}s)")
 
     try:
@@ -44,7 +46,7 @@ async def main():
                 await _notification_task
             except asyncio.CancelledError:
                 pass
-        
+
         await api_client.close()
         await bot.session.close()
 
