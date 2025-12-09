@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: balance-tracker-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: balance-tracker-bot
+    depends_on:
+      - api
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - API_URL=http://api:8000
+      - ALLOWED_USERS=${ALLOWED_USERS:-6238100241}
+      - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
+    restart: unless-stopped
