@@ -19,9 +19,9 @@ wheels/
 .installed.cfg
 *.egg
 
-.env
-.env.local
-.env.*.local
+# .env
+# .env.local
+# .env.*.local
 *.log
 
 .idea/
