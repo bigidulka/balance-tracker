@@ -286,7 +286,9 @@ class CCXTManager:
                     "options": {
                         "defaultType": "spot",
                         "adjustForTimeDifference": True,
-                        **EXCHANGE_OPTIONS.get(exchange_id, {}),  # Специальные опции для биржи
+                        **EXCHANGE_OPTIONS.get(
+                            exchange_id, {}
+                        ),  # Специальные опции для биржи
                     },
                 }
 
