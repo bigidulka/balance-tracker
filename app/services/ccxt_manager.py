@@ -14,7 +14,12 @@ import aiohttp
 import ccxt.pro as ccxtpro
 
 from app.core.config import get_settings
-from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema, TransactionSchema
+from app.schemas.balance import (
+    AssetSchema,
+    AccountBalanceSchema,
+    ServiceBalanceSchema,
+    TransactionSchema,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -551,29 +556,28 @@ class CCXTManager:
     # ==================== Transaction Methods ====================
 
     def _normalize_transaction(
-        self, 
-        raw_tx: dict, 
-        exchange_id: str, 
-        tx_type: str
+        self, raw_tx: dict, exchange_id: str, tx_type: str
     ) -> TransactionSchema:
         """Нормализует транзакцию из CCXT формата в нашу схему"""
-        
+
         # Извлекаем tx_id - используем id из CCXT или генерируем из txid
         tx_id = raw_tx.get("id")
         if not tx_id:
-            tx_id = raw_tx.get("txid") or f"{exchange_id}_{tx_type}_{raw_tx.get('timestamp', 'unknown')}"
-        
+            tx_id = (
+                raw_tx.get("txid")
+                or f"{exchange_id}_{tx_type}_{raw_tx.get('timestamp', 'unknown')}"
+            )
+
         # Парсим timestamp
         tx_timestamp = None
         if raw_tx.get("timestamp"):
             try:
                 tx_timestamp = datetime.fromtimestamp(
-                    raw_tx["timestamp"] / 1000, 
-                    tz=timezone.utc
+                    raw_tx["timestamp"] / 1000, tz=timezone.utc
                 )
             except (ValueError, TypeError):
                 pass
-        
+
         # Нормализуем статус
         raw_status = raw_tx.get("status", "").lower()
         if raw_status in ("ok", "completed", "finished", "success"):
@@ -586,12 +590,12 @@ class CCXTManager:
             status = "canceled"
         else:
             status = "pending"
-        
+
         # Извлекаем комиссию
         fee_data = raw_tx.get("fee", {}) or {}
         fee = fee_data.get("cost")
         fee_currency = fee_data.get("currency")
-        
+
         return TransactionSchema(
             tx_id=str(tx_id),
             service=exchange_id,
@@ -612,132 +616,129 @@ class CCXTManager:
         )
 
     async def fetch_deposits(
-        self, 
-        exchange_id: str, 
-        since: Optional[datetime] = None,
-        limit: int = 50
+        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
     ) -> list[TransactionSchema]:
         """Получает историю вводов (deposits) для биржи"""
-        
+
         exchange = await self._get_exchange(exchange_id)
-        
+
         # Проверяем поддержку метода
         if not exchange.has.get("fetchDeposits"):
             logger.debug(f"{exchange_id} does not support fetchDeposits")
             return []
-        
+
         try:
             since_ts = int(since.timestamp() * 1000) if since else None
-            
+
             raw_deposits = await exchange.fetch_deposits(
-                code=None,  # Все валюты
-                since=since_ts,
-                limit=limit
+                code=None, since=since_ts, limit=limit  # Все валюты
             )
-            
+
             deposits = []
             for raw_tx in raw_deposits:
                 try:
                     tx = self._normalize_transaction(raw_tx, exchange_id, "deposit")
                     deposits.append(tx)
                 except Exception as e:
-                    logger.warning(f"Failed to normalize deposit from {exchange_id}: {e}")
-            
+                    logger.warning(
+                        f"Failed to normalize deposit from {exchange_id}: {e}"
+                    )
+
             logger.info(f"Fetched {len(deposits)} deposits from {exchange_id}")
             return deposits
-            
+
         except Exception as e:
             error_msg = str(e).lower()
             # Игнорируем ошибки для неподдерживаемых функций
-            if any(x in error_msg for x in ["not support", "not available", "permission", "not found"]):
+            if any(
+                x in error_msg
+                for x in ["not support", "not available", "permission", "not found"]
+            ):
                 logger.debug(f"{exchange_id} fetchDeposits not available: {e}")
             else:
                 logger.warning(f"Error fetching deposits from {exchange_id}: {e}")
             return []
 
     async def fetch_withdrawals(
-        self, 
-        exchange_id: str, 
-        since: Optional[datetime] = None,
-        limit: int = 50
+        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
     ) -> list[TransactionSchema]:
         """Получает историю выводов (withdrawals) для биржи"""
-        
+
         exchange = await self._get_exchange(exchange_id)
-        
+
         # Проверяем поддержку метода
         if not exchange.has.get("fetchWithdrawals"):
             logger.debug(f"{exchange_id} does not support fetchWithdrawals")
             return []
-        
+
         try:
             since_ts = int(since.timestamp() * 1000) if since else None
-            
+
             raw_withdrawals = await exchange.fetch_withdrawals(
-                code=None,  # Все валюты
-                since=since_ts,
-                limit=limit
+                code=None, since=since_ts, limit=limit  # Все валюты
             )
-            
+
             withdrawals = []
             for raw_tx in raw_withdrawals:
                 try:
                     tx = self._normalize_transaction(raw_tx, exchange_id, "withdrawal")
                     withdrawals.append(tx)
                 except Exception as e:
-                    logger.warning(f"Failed to normalize withdrawal from {exchange_id}: {e}")
-            
+                    logger.warning(
+                        f"Failed to normalize withdrawal from {exchange_id}: {e}"
+                    )
+
             logger.info(f"Fetched {len(withdrawals)} withdrawals from {exchange_id}")
             return withdrawals
-            
+
         except Exception as e:
             error_msg = str(e).lower()
             # Игнорируем ошибки для неподдерживаемых функций
-            if any(x in error_msg for x in ["not support", "not available", "permission", "not found"]):
+            if any(
+                x in error_msg
+                for x in ["not support", "not available", "permission", "not found"]
+            ):
                 logger.debug(f"{exchange_id} fetchWithdrawals not available: {e}")
             else:
                 logger.warning(f"Error fetching withdrawals from {exchange_id}: {e}")
             return []
 
     async def fetch_all_transactions(
-        self, 
-        exchange_id: str, 
-        since: Optional[datetime] = None,
-        limit: int = 50
+        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
     ) -> list[TransactionSchema]:
         """Получает все транзакции (deposits + withdrawals) для биржи"""
-        
+
         deposits = await self.fetch_deposits(exchange_id, since, limit)
         withdrawals = await self.fetch_withdrawals(exchange_id, since, limit)
-        
+
         all_transactions = deposits + withdrawals
-        
+
         # Сортируем по времени (новые первые)
         all_transactions.sort(
-            key=lambda x: x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc), 
-            reverse=True
+            key=lambda x: x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
         )
-        
+
         return all_transactions
 
     async def fetch_transactions_all_exchanges(
         self,
         exchange_ids: Optional[list[str]] = None,
         since: Optional[datetime] = None,
-        limit: int = 50
+        limit: int = 50,
     ) -> dict[str, list[TransactionSchema] | Exception]:
         """Получает транзакции со всех бирж"""
-        
+
         if exchange_ids is None:
             exchange_ids = settings.get_active_exchanges()
-        
+
         results = {}
-        
+
         for exchange_id in exchange_ids:
             try:
                 results[exchange_id] = await asyncio.wait_for(
                     self.fetch_all_transactions(exchange_id, since, limit),
-                    timeout=settings.request_timeout
+                    timeout=settings.request_timeout,
                 )
             except asyncio.TimeoutError:
                 logger.error(f"Timeout fetching transactions from {exchange_id}")
@@ -745,7 +746,7 @@ class CCXTManager:
             except Exception as e:
                 logger.error(f"Failed to fetch transactions from {exchange_id}: {e}")
                 results[exchange_id] = e
-        
+
         return results
 
     async def close_all(self):
