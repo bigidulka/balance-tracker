@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Bot
 
@@ -16,6 +16,12 @@ STABLECOINS = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "FDUSD", "USDD", "
 # Хранилище предыдущих балансов: {service: {coin: amount}}
 _previous_balances: Dict[str, Dict[str, float]] = {}
 
+# История изменений для фильтрации шума: {service: {coin: [(timestamp, old, new), ...]}}
+_change_history: Dict[str, Dict[str, List[Tuple[datetime, float, float]]]] = {}
+
+# Время для определения "колебаний" (если изменение туда-обратно за это время - игнорируем)
+OSCILLATION_WINDOW = timedelta(minutes=15)
+
 
 def _format_amount(amount: float, coin: str) -> str:
     """Форматирует количество токенов"""
@@ -27,6 +33,41 @@ def _format_amount(amount: float, coin: str) -> str:
         return f"{amount:.4f}"
     else:
         return f"{amount:.8f}"
+
+
+def _is_oscillation(service: str, coin: str, old_amount: float, new_amount: float) -> bool:
+    """
+    Проверяет, является ли изменение "колебанием" (туда-обратно).
+    Возвращает True если нужно игнорировать это изменение.
+    """
+    now = datetime.now()
+    
+    # Инициализируем историю если нужно
+    if service not in _change_history:
+        _change_history[service] = {}
+    if coin not in _change_history[service]:
+        _change_history[service][coin] = []
+    
+    history = _change_history[service][coin]
+    
+    # Очищаем старые записи
+    cutoff = now - OSCILLATION_WINDOW
+    history[:] = [(ts, old, new) for ts, old, new in history if ts > cutoff]
+    
+    # Проверяем, было ли обратное изменение недавно
+    # Если раньше было new_amount -> old_amount, а сейчас old_amount -> new_amount - это колебание
+    for ts, prev_old, prev_new in history:
+        # Проверяем обратное изменение с допуском 1%
+        if (abs(prev_old - new_amount) / max(prev_old, new_amount, 1) < 0.01 and
+            abs(prev_new - old_amount) / max(prev_new, old_amount, 1) < 0.01):
+            logger.info(f"Oscillation detected for {service}/{coin}: {old_amount} -> {new_amount} "
+                       f"(reverse of {prev_old} -> {prev_new})")
+            return True
+    
+    # Записываем текущее изменение
+    history.append((now, old_amount, new_amount))
+    
+    return False
 
 
 def _should_notify(coin: str, old_amount: float, new_amount: float) -> bool:
@@ -67,6 +108,10 @@ def _detect_changes(
         new_amount = new_assets.get(coin, 0)
 
         if not _should_notify(coin, old_amount, new_amount):
+            continue
+
+        # Проверяем, не является ли это колебанием (туда-обратно)
+        if _is_oscillation(service, coin, old_amount, new_amount):
             continue
 
         if new_amount > old_amount:
@@ -122,6 +167,12 @@ async def check_and_notify(bot: Bot) -> None:
 
         for svc in services:
             service_name = svc.get("service", "")
+            
+            # Пропускаем если данные неактуальные (ошибка API, fallback)
+            is_actual = svc.get("actual", True)
+            if not is_actual:
+                logger.debug(f"Skipping {service_name}: data is not actual (API error/fallback)")
+                continue
 
             # Собираем текущие балансы по количеству токенов
             current_assets: Dict[str, float] = {}
@@ -145,6 +196,13 @@ async def check_and_notify(bot: Bot) -> None:
             # Пропускаем первый запуск (инициализация)
             if service_name not in _previous_balances:
                 _previous_balances[service_name] = current_assets
+                continue
+
+            # Защита от фиктивных изменений: если текущий баланс пустой,
+            # но предыдущий был непустой - это скорее всего ошибка API
+            old_assets = _previous_balances.get(service_name, {})
+            if not current_assets and old_assets:
+                logger.warning(f"Skipping {service_name}: empty balance received, keeping previous data")
                 continue
 
             # Определяем изменения
