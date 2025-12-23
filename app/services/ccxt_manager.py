@@ -83,10 +83,8 @@ EXCHANGE_ACCOUNT_TYPES: dict[str, list[dict]] = {
         {"type": "spot", "params": {"type": "funding"}},  # funding -> spot
     ],
     "bybit": [
-        {"type": "spot", "params": {"type": "unified"}},  # unified -> spot
-        {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "fund"}},  # fund -> spot
-        {"type": "futures", "params": {"type": "contract"}},  # contract -> futures
+        # Bybit Unified Account - один запрос возвращает все балансы (spot + derivatives)
+        {"type": "spot", "params": {"type": "unified"}},
     ],
     "bitget": [
         {"type": "spot", "params": {"type": "spot"}},
