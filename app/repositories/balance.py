@@ -3,11 +3,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.balance import Balance, BalanceHistory, ServiceStatus
-from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
+from app.models.balance import Balance, BalanceHistory, ServiceStatus, Transaction
+from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema, TransactionSchema
 
 logger = logging.getLogger(__name__)
 
@@ -197,3 +197,186 @@ class ServiceStatusRepository:
 
         await self.session.commit()
         return status
+
+
+class TransactionRepository:
+    """Репозиторий для работы с транзакциями (вводы/выводы)"""
+    
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_tx_id(self, service: str, tx_id: str) -> Optional[Transaction]:
+        """Получить транзакцию по tx_id и сервису"""
+        query = select(Transaction).where(
+            and_(
+                Transaction.service == service,
+                Transaction.tx_id == tx_id
+            )
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_transactions(
+        self,
+        service: Optional[str] = None,
+        tx_type: Optional[str] = None,  # deposit, withdrawal
+        status: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Transaction]:
+        """Получить список транзакций с фильтрами"""
+        query = select(Transaction)
+        
+        if service:
+            query = query.where(Transaction.service == service)
+        if tx_type:
+            query = query.where(Transaction.tx_type == tx_type)
+        if status:
+            query = query.where(Transaction.status == status)
+        if start_date:
+            query = query.where(Transaction.tx_timestamp >= start_date)
+        if end_date:
+            query = query.where(Transaction.tx_timestamp <= end_date)
+        
+        query = query.order_by(desc(Transaction.tx_timestamp)).offset(offset).limit(limit)
+        
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_transaction_count(
+        self,
+        service: Optional[str] = None,
+        tx_type: Optional[str] = None,
+        status: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> int:
+        """Подсчёт транзакций с фильтрами"""
+        from sqlalchemy import func
+        
+        query = select(func.count(Transaction.id))
+        
+        if service:
+            query = query.where(Transaction.service == service)
+        if tx_type:
+            query = query.where(Transaction.tx_type == tx_type)
+        if status:
+            query = query.where(Transaction.status == status)
+        if start_date:
+            query = query.where(Transaction.tx_timestamp >= start_date)
+        if end_date:
+            query = query.where(Transaction.tx_timestamp <= end_date)
+        
+        result = await self.session.execute(query)
+        return result.scalar() or 0
+
+    async def get_unnotified_transactions(
+        self,
+        status: str = "ok"
+    ) -> list[Transaction]:
+        """Получить транзакции без отправленных уведомлений"""
+        query = select(Transaction).where(
+            and_(
+                Transaction.notified == False,
+                Transaction.status == status
+            )
+        ).order_by(Transaction.tx_timestamp)
+        
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def save_transaction(self, tx_data: TransactionSchema) -> tuple[Transaction, bool]:
+        """
+        Сохранить или обновить транзакцию.
+        Возвращает (transaction, is_new) - транзакцию и флаг, новая ли она.
+        """
+        existing = await self.get_by_tx_id(tx_data.service, tx_data.tx_id)
+        
+        if existing:
+            # Обновляем существующую транзакцию
+            status_changed = existing.status != tx_data.status
+            
+            existing.status = tx_data.status
+            existing.txid = tx_data.txid or existing.txid
+            existing.fee = tx_data.fee or existing.fee
+            existing.fee_currency = tx_data.fee_currency or existing.fee_currency
+            existing.network = tx_data.network or existing.network
+            existing.address = tx_data.address or existing.address
+            existing.address_from = tx_data.address_from or existing.address_from
+            existing.address_to = tx_data.address_to or existing.address_to
+            
+            await self.session.commit()
+            return existing, False
+        else:
+            # Создаём новую транзакцию
+            transaction = Transaction(
+                tx_id=tx_data.tx_id,
+                service=tx_data.service,
+                tx_type=tx_data.tx_type,
+                currency=tx_data.currency,
+                amount=tx_data.amount,
+                fee=tx_data.fee,
+                fee_currency=tx_data.fee_currency,
+                network=tx_data.network,
+                address=tx_data.address,
+                address_from=tx_data.address_from,
+                address_to=tx_data.address_to,
+                tag=tx_data.tag,
+                status=tx_data.status,
+                txid=tx_data.txid,
+                tx_timestamp=tx_data.tx_timestamp,
+                notified=False,
+            )
+            self.session.add(transaction)
+            await self.session.commit()
+            return transaction, True
+
+    async def mark_as_notified(self, transaction_id: int) -> bool:
+        """Отметить транзакцию как обработанную (уведомление отправлено)"""
+        query = select(Transaction).where(Transaction.id == transaction_id)
+        result = await self.session.execute(query)
+        transaction = result.scalar_one_or_none()
+        
+        if transaction:
+            transaction.notified = True
+            await self.session.commit()
+            return True
+        return False
+
+    async def mark_multiple_as_notified(self, transaction_ids: list[int]) -> int:
+        """Отметить несколько транзакций как обработанные"""
+        if not transaction_ids:
+            return 0
+        
+        from sqlalchemy import update
+        
+        stmt = (
+            update(Transaction)
+            .where(Transaction.id.in_(transaction_ids))
+            .values(notified=True)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount
+
+    async def get_last_transaction_timestamp(
+        self, 
+        service: str, 
+        tx_type: str
+    ) -> Optional[datetime]:
+        """Получить время последней транзакции для сервиса"""
+        query = (
+            select(Transaction.tx_timestamp)
+            .where(
+                and_(
+                    Transaction.service == service,
+                    Transaction.tx_type == tx_type
+                )
+            )
+            .order_by(desc(Transaction.tx_timestamp))
+            .limit(1)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()

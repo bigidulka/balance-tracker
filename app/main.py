@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.database import async_session_maker, init_db
 from app.routers.balances import router as balances_router
+from app.routers.transactions import router as transactions_router
 from app.services.balance_service import BalanceService
 from app.services.ccxt_manager import ccxt_manager
 from app.services.okx_wallet import okx_wallet_service
@@ -101,6 +102,7 @@ app.add_middleware(
 )
 
 app.include_router(balances_router)
+app.include_router(transactions_router)
 
 
 @app.get("/")
