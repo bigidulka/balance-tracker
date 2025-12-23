@@ -21,7 +21,7 @@ settings = get_settings()
 
 class TransactionService:
     """Сервис для работы с транзакциями (вводы/выводы)"""
-    
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.tx_repo = TransactionRepository(session)
@@ -38,7 +38,7 @@ class TransactionService:
         offset: int = 0,
     ) -> TransactionListResponse:
         """Получить список транзакций с фильтрами"""
-        
+
         transactions = await self.tx_repo.get_transactions(
             service=service,
             tx_type=tx_type,
@@ -48,7 +48,7 @@ class TransactionService:
             limit=limit,
             offset=offset,
         )
-        
+
         total_count = await self.tx_repo.get_transaction_count(
             service=service,
             tx_type=tx_type,
@@ -56,7 +56,7 @@ class TransactionService:
             start_date=start_date,
             end_date=end_date,
         )
-        
+
         tx_schemas = [
             TransactionSchema(
                 id=tx.id,
@@ -81,7 +81,7 @@ class TransactionService:
             )
             for tx in transactions
         ]
-        
+
         return TransactionListResponse(
             service=service,
             tx_type=tx_type,
@@ -91,7 +91,7 @@ class TransactionService:
 
     async def get_service_summary(self, service: str) -> TransactionsSummary:
         """Получить сводку по транзакциям для сервиса"""
-        
+
         total_deposits = await self.tx_repo.get_transaction_count(
             service=service, tx_type="deposit"
         )
@@ -104,14 +104,14 @@ class TransactionService:
         pending_withdrawals = await self.tx_repo.get_transaction_count(
             service=service, tx_type="withdrawal", status="pending"
         )
-        
+
         last_deposit = await self.tx_repo.get_last_transaction_timestamp(
             service, "deposit"
         )
         last_withdrawal = await self.tx_repo.get_last_transaction_timestamp(
             service, "withdrawal"
         )
-        
+
         return TransactionsSummary(
             service=service,
             total_deposits=total_deposits,
@@ -128,31 +128,31 @@ class TransactionService:
         since_hours: int = 24 * 7,  # По умолчанию за последнюю неделю
     ) -> TransactionsRefreshResponse:
         """Обновить транзакции со всех бирж"""
-        
+
         if exchange_ids is None:
             exchange_ids = settings.get_active_exchanges()
-        
+
         since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-        
+
         new_count = 0
         updated_count = 0
         checked_services = []
         failed_services = []
-        
+
         results = await ccxt_manager.fetch_transactions_all_exchanges(
-            exchange_ids=exchange_ids,
-            since=since,
-            limit=100
+            exchange_ids=exchange_ids, since=since, limit=100
         )
-        
+
         for exchange_id, result in results.items():
             if isinstance(result, Exception):
-                logger.warning(f"Failed to fetch transactions from {exchange_id}: {result}")
+                logger.warning(
+                    f"Failed to fetch transactions from {exchange_id}: {result}"
+                )
                 failed_services.append(exchange_id)
                 continue
-            
+
             checked_services.append(exchange_id)
-            
+
             for tx_data in result:
                 try:
                     _, is_new = await self.tx_repo.save_transaction(tx_data)
@@ -162,10 +162,12 @@ class TransactionService:
                         updated_count += 1
                 except Exception as e:
                     logger.error(f"Failed to save transaction {tx_data.tx_id}: {e}")
-        
-        status = "ok" if not failed_services else "partial" if checked_services else "error"
+
+        status = (
+            "ok" if not failed_services else "partial" if checked_services else "error"
+        )
         message = f"Found {new_count} new and {updated_count} updated transactions"
-        
+
         return TransactionsRefreshResponse(
             status=status,
             message=message,
@@ -177,9 +179,9 @@ class TransactionService:
 
     async def get_unnotified_transactions(self) -> list[TransactionSchema]:
         """Получить транзакции, для которых не было отправлено уведомление"""
-        
+
         transactions = await self.tx_repo.get_unnotified_transactions(status="ok")
-        
+
         return [
             TransactionSchema(
                 id=tx.id,

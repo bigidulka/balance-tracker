@@ -7,7 +7,12 @@ from sqlalchemy import desc, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.balance import Balance, BalanceHistory, ServiceStatus, Transaction
-from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema, TransactionSchema
+from app.schemas.balance import (
+    AccountBalanceSchema,
+    AssetSchema,
+    ServiceBalanceSchema,
+    TransactionSchema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,17 +206,14 @@ class ServiceStatusRepository:
 
 class TransactionRepository:
     """Репозиторий для работы с транзакциями (вводы/выводы)"""
-    
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def get_by_tx_id(self, service: str, tx_id: str) -> Optional[Transaction]:
         """Получить транзакцию по tx_id и сервису"""
         query = select(Transaction).where(
-            and_(
-                Transaction.service == service,
-                Transaction.tx_id == tx_id
-            )
+            and_(Transaction.service == service, Transaction.tx_id == tx_id)
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -228,7 +230,7 @@ class TransactionRepository:
     ) -> list[Transaction]:
         """Получить список транзакций с фильтрами"""
         query = select(Transaction)
-        
+
         if service:
             query = query.where(Transaction.service == service)
         if tx_type:
@@ -239,9 +241,11 @@ class TransactionRepository:
             query = query.where(Transaction.tx_timestamp >= start_date)
         if end_date:
             query = query.where(Transaction.tx_timestamp <= end_date)
-        
-        query = query.order_by(desc(Transaction.tx_timestamp)).offset(offset).limit(limit)
-        
+
+        query = (
+            query.order_by(desc(Transaction.tx_timestamp)).offset(offset).limit(limit)
+        )
+
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -255,9 +259,9 @@ class TransactionRepository:
     ) -> int:
         """Подсчёт транзакций с фильтрами"""
         from sqlalchemy import func
-        
+
         query = select(func.count(Transaction.id))
-        
+
         if service:
             query = query.where(Transaction.service == service)
         if tx_type:
@@ -268,36 +272,36 @@ class TransactionRepository:
             query = query.where(Transaction.tx_timestamp >= start_date)
         if end_date:
             query = query.where(Transaction.tx_timestamp <= end_date)
-        
+
         result = await self.session.execute(query)
         return result.scalar() or 0
 
     async def get_unnotified_transactions(
-        self,
-        status: str = "ok"
+        self, status: str = "ok"
     ) -> list[Transaction]:
         """Получить транзакции без отправленных уведомлений"""
-        query = select(Transaction).where(
-            and_(
-                Transaction.notified == False,
-                Transaction.status == status
-            )
-        ).order_by(Transaction.tx_timestamp)
-        
+        query = (
+            select(Transaction)
+            .where(and_(Transaction.notified == False, Transaction.status == status))
+            .order_by(Transaction.tx_timestamp)
+        )
+
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def save_transaction(self, tx_data: TransactionSchema) -> tuple[Transaction, bool]:
+    async def save_transaction(
+        self, tx_data: TransactionSchema
+    ) -> tuple[Transaction, bool]:
         """
         Сохранить или обновить транзакцию.
         Возвращает (transaction, is_new) - транзакцию и флаг, новая ли она.
         """
         existing = await self.get_by_tx_id(tx_data.service, tx_data.tx_id)
-        
+
         if existing:
             # Обновляем существующую транзакцию
             status_changed = existing.status != tx_data.status
-            
+
             existing.status = tx_data.status
             existing.txid = tx_data.txid or existing.txid
             existing.fee = tx_data.fee or existing.fee
@@ -306,7 +310,7 @@ class TransactionRepository:
             existing.address = tx_data.address or existing.address
             existing.address_from = tx_data.address_from or existing.address_from
             existing.address_to = tx_data.address_to or existing.address_to
-            
+
             await self.session.commit()
             return existing, False
         else:
@@ -338,7 +342,7 @@ class TransactionRepository:
         query = select(Transaction).where(Transaction.id == transaction_id)
         result = await self.session.execute(query)
         transaction = result.scalar_one_or_none()
-        
+
         if transaction:
             transaction.notified = True
             await self.session.commit()
@@ -349,9 +353,9 @@ class TransactionRepository:
         """Отметить несколько транзакций как обработанные"""
         if not transaction_ids:
             return 0
-        
+
         from sqlalchemy import update
-        
+
         stmt = (
             update(Transaction)
             .where(Transaction.id.in_(transaction_ids))
@@ -362,19 +366,12 @@ class TransactionRepository:
         return result.rowcount
 
     async def get_last_transaction_timestamp(
-        self, 
-        service: str, 
-        tx_type: str
+        self, service: str, tx_type: str
     ) -> Optional[datetime]:
         """Получить время последней транзакции для сервиса"""
         query = (
             select(Transaction.tx_timestamp)
-            .where(
-                and_(
-                    Transaction.service == service,
-                    Transaction.tx_type == tx_type
-                )
-            )
+            .where(and_(Transaction.service == service, Transaction.tx_type == tx_type))
             .order_by(desc(Transaction.tx_timestamp))
             .limit(1)
         )

@@ -18,8 +18,12 @@ router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 @router.get("", response_model=TransactionListResponse)
 async def get_transactions(
     service: Optional[str] = Query(None, description="Filter by service/exchange name"),
-    tx_type: Optional[str] = Query(None, description="Filter by type: deposit or withdrawal"),
-    status: Optional[str] = Query(None, description="Filter by status: pending, ok, failed, canceled"),
+    tx_type: Optional[str] = Query(
+        None, description="Filter by type: deposit or withdrawal"
+    ),
+    status: Optional[str] = Query(
+        None, description="Filter by status: pending, ok, failed, canceled"
+    ),
     start_date: Optional[datetime] = Query(None, description="Start date filter"),
     end_date: Optional[datetime] = Query(None, description="End date filter"),
     limit: int = Query(100, ge=1, le=500, description="Maximum entries to return"),
@@ -28,7 +32,7 @@ async def get_transactions(
 ):
     """
     Получить список транзакций с фильтрами.
-    
+
     Поддерживаемые фильтры:
     - service: название биржи (binance, okx, bybit и т.д.)
     - tx_type: deposit (ввод) или withdrawal (вывод)
@@ -105,12 +109,14 @@ async def get_service_summary(
 
 @router.post("/refresh", response_model=TransactionsRefreshResponse)
 async def refresh_transactions(
-    since_hours: int = Query(168, ge=1, le=720, description="Hours to look back (default: 7 days)"),
+    since_hours: int = Query(
+        168, ge=1, le=720, description="Hours to look back (default: 7 days)"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Обновить транзакции со всех активных бирж.
-    
+
     Параметры:
     - since_hours: сколько часов назад искать транзакции (по умолчанию 168 = 7 дней)
     """

@@ -35,7 +35,9 @@ async def main():
     _notification_task = asyncio.create_task(
         notification_loop(bot, interval=NOTIFICATION_INTERVAL)
     )
-    logger.info(f"Balance notification loop started (interval: {NOTIFICATION_INTERVAL}s)")
+    logger.info(
+        f"Balance notification loop started (interval: {NOTIFICATION_INTERVAL}s)"
+    )
 
     # Start transaction notification background task (check every 2 minutes)
     tx_interval = max(NOTIFICATION_INTERVAL, 120)

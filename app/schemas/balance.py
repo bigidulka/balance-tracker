@@ -73,7 +73,7 @@ class HealthResponse(BaseModel):
 
 class TransactionSchema(BaseModel):
     """Схема транзакции (ввод/вывод)"""
-    
+
     id: Optional[int] = None
     tx_id: str  # Уникальный ID транзакции на бирже
     service: str  # Биржа
@@ -97,16 +97,16 @@ class TransactionSchema(BaseModel):
 
 class TransactionListResponse(BaseModel):
     """Ответ со списком транзакций"""
-    
+
     service: Optional[str] = None
     tx_type: Optional[str] = None  # deposit, withdrawal или None для всех
     transactions: list[TransactionSchema]
     total_count: int
-    
+
 
 class TransactionsSummary(BaseModel):
     """Сводка по транзакциям сервиса"""
-    
+
     service: str
     total_deposits: int
     total_withdrawals: int
@@ -118,7 +118,7 @@ class TransactionsSummary(BaseModel):
 
 class TransactionsRefreshResponse(BaseModel):
     """Ответ на запрос обновления транзакций"""
-    
+
     status: str
     message: str
     new_transactions: int
