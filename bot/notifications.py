@@ -22,6 +22,13 @@ _change_history: Dict[str, Dict[str, List[Tuple[datetime, float, float]]]] = {}
 # Время для определения "колебаний" (если изменение туда-обратно за это время - игнорируем)
 OSCILLATION_WINDOW = timedelta(minutes=15)
 
+# Хранилище обработанных транзакций (tx_id: service)
+_processed_transactions: Dict[str, str] = {}
+
+# Биржи, для которых используется подход через изменение баланса (без API транзакций)
+# Для остальных бирж уведомления приходят через транзакции
+BALANCE_BASED_SERVICES = {"okx"}
+
 
 def _format_amount(amount: float, coin: str) -> str:
     """Форматирует количество токенов"""
@@ -158,7 +165,12 @@ def _format_notification(
 
 
 async def check_and_notify(bot: Bot) -> None:
-    """Проверяет изменения балансов и отправляет уведомления"""
+    """
+    Проверяет изменения балансов и отправляет уведомления.
+    Используется ТОЛЬКО для бирж из BALANCE_BASED_SERVICES (OKX и др.),
+    у которых нет API для получения истории транзакций.
+    Для остальных бирж уведомления приходят через transaction_notification_loop.
+    """
     global _previous_balances
 
     try:
@@ -167,6 +179,10 @@ async def check_and_notify(bot: Bot) -> None:
 
         for svc in services:
             service_name = svc.get("service", "")
+            
+            # Обрабатываем ТОЛЬКО биржи из BALANCE_BASED_SERVICES
+            if service_name.lower() not in BALANCE_BASED_SERVICES:
+                continue
             
             # Пропускаем если данные неактуальные (ошибка API, fallback)
             is_actual = svc.get("actual", True)
@@ -226,8 +242,11 @@ async def check_and_notify(bot: Bot) -> None:
 
 
 async def notification_loop(bot: Bot, interval: int = 60) -> None:
-    """Фоновый цикл проверки изменений балансов"""
-    logger.info(f"Starting notification loop with {interval}s interval")
+    """
+    Фоновый цикл проверки изменений балансов.
+    Используется ТОЛЬКО для бирж из BALANCE_BASED_SERVICES (OKX).
+    """
+    logger.info(f"Starting balance notification loop for {BALANCE_BASED_SERVICES} with {interval}s interval")
 
     # Начальная задержка для загрузки данных
     await asyncio.sleep(10)
@@ -241,4 +260,170 @@ async def notification_loop(bot: Bot, interval: int = 60) -> None:
         except Exception as e:
             logger.error(f"Notification loop error: {e}")
 
+        await asyncio.sleep(interval)
+
+
+# ==================== Transaction Notifications ====================
+
+
+def _format_transaction_notification(tx: Dict) -> str:
+    """Форматирует уведомление о транзакции"""
+    tx_type = tx.get("tx_type", "unknown")
+    service = tx.get("service", "unknown")
+    currency = tx.get("currency", "UNKNOWN")
+    amount = float(tx.get("amount", 0))
+    network = tx.get("network") or "—"
+    status = tx.get("status", "pending")
+    txid = tx.get("txid") or "—"
+    fee = tx.get("fee") or 0
+    fee_currency = tx.get("fee_currency") or currency
+    
+    # Иконки и заголовок
+    if tx_type == "deposit":
+        icon = "📥"
+        title = "Ввод средств"
+        direction = "Получено"
+    else:
+        icon = "📤"
+        title = "Вывод средств"
+        direction = "Отправлено"
+    
+    # Статус
+    status_icons = {
+        "ok": "✅",
+        "pending": "⏳",
+        "failed": "❌",
+        "canceled": "🚫",
+    }
+    status_icon = status_icons.get(status, "❓")
+    status_text = {
+        "ok": "Завершено",
+        "pending": "В обработке",
+        "failed": "Ошибка",
+        "canceled": "Отменено",
+    }.get(status, status)
+    
+    # Форматирование суммы
+    if currency in STABLECOINS:
+        amount_str = f"{amount:,.2f}"
+    elif amount >= 1000:
+        amount_str = f"{amount:,.2f}"
+    elif amount >= 1:
+        amount_str = f"{amount:.4f}"
+    else:
+        amount_str = f"{amount:.8f}"
+    
+    lines = [
+        f"{icon} <b>{title}</b> — {service.upper()}",
+        "",
+        f"💰 {direction}: <b>{amount_str} {currency}</b>",
+        f"🌐 Сеть: {network}",
+        f"📊 Статус: {status_icon} {status_text}",
+    ]
+    
+    if fee and fee > 0:
+        if fee_currency in STABLECOINS:
+            fee_str = f"{fee:.2f}"
+        else:
+            fee_str = f"{fee:.8f}".rstrip('0').rstrip('.')
+        lines.append(f"💸 Комиссия: {fee_str} {fee_currency}")
+    
+    if txid and txid != "—":
+        # Сокращаем длинный txid
+        if len(txid) > 20:
+            txid_short = f"{txid[:10]}...{txid[-8:]}"
+        else:
+            txid_short = txid
+        lines.append(f"🔗 TX: <code>{txid_short}</code>")
+    
+    # Время транзакции
+    tx_timestamp = tx.get("tx_timestamp")
+    if tx_timestamp:
+        try:
+            if isinstance(tx_timestamp, str):
+                dt = datetime.fromisoformat(tx_timestamp.replace("Z", "+00:00"))
+            else:
+                dt = tx_timestamp
+            time_str = dt.strftime("%d.%m.%Y %H:%M UTC")
+            lines.append(f"🕐 {time_str}")
+        except:
+            pass
+    
+    return "\n".join(lines)
+
+
+async def check_and_notify_transactions(bot: Bot) -> None:
+    """Проверяет новые транзакции и отправляет уведомления"""
+    global _processed_transactions
+    
+    try:
+        # Сначала обновляем транзакции с бирж
+        try:
+            await api_client.refresh_transactions(since_hours=24)
+        except Exception as e:
+            logger.warning(f"Failed to refresh transactions: {e}")
+        
+        # Получаем последние транзакции
+        data = await api_client.get_transactions(status="ok", limit=50)
+        transactions = data.get("transactions", [])
+        
+        for tx in transactions:
+            tx_id = tx.get("tx_id")
+            service = tx.get("service", "")
+            
+            if not tx_id:
+                continue
+            
+            # Уникальный ключ для транзакции
+            tx_key = f"{service}_{tx_id}"
+            
+            # Пропускаем уже обработанные
+            if tx_key in _processed_transactions:
+                continue
+            
+            # Проверяем, было ли уже отправлено уведомление (по флагу notified)
+            if tx.get("notified", False):
+                _processed_transactions[tx_key] = service
+                continue
+            
+            # Отправляем уведомление
+            message = _format_transaction_notification(tx)
+            
+            for user_id in ALLOWED_USERS:
+                try:
+                    await bot.send_message(user_id, message, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"Failed to send transaction notification to {user_id}: {e}")
+            
+            # Помечаем как обработанную
+            _processed_transactions[tx_key] = service
+            
+            logger.info(f"Sent notification for transaction {tx_key}")
+        
+        # Очищаем старые записи (храним только последние 1000)
+        if len(_processed_transactions) > 1000:
+            # Оставляем последние 500
+            items = list(_processed_transactions.items())
+            _processed_transactions = dict(items[-500:])
+            
+    except Exception as e:
+        logger.error(f"Error checking transactions for notifications: {e}")
+
+
+async def transaction_notification_loop(bot: Bot, interval: int = 120) -> None:
+    """Фоновый цикл проверки новых транзакций"""
+    logger.info(f"Starting transaction notification loop with {interval}s interval")
+    
+    # Начальная задержка
+    await asyncio.sleep(30)
+    
+    while True:
+        try:
+            await check_and_notify_transactions(bot)
+        except asyncio.CancelledError:
+            logger.info("Transaction notification loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Transaction notification loop error: {e}")
+        
         await asyncio.sleep(interval)

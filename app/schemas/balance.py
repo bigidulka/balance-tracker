@@ -66,3 +66,62 @@ class HealthResponse(BaseModel):
     services: list[ServiceHealthSchema]
     total_services: int
     healthy_services: int
+
+
+# ==================== Transaction Schemas ====================
+
+
+class TransactionSchema(BaseModel):
+    """Схема транзакции (ввод/вывод)"""
+    
+    id: Optional[int] = None
+    tx_id: str  # Уникальный ID транзакции на бирже
+    service: str  # Биржа
+    tx_type: str  # deposit или withdrawal
+    currency: str  # Валюта
+    amount: float  # Сумма
+    fee: Optional[float] = 0.0  # Комиссия
+    fee_currency: Optional[str] = None  # Валюта комиссии
+    network: Optional[str] = None  # Сеть (ETH, BSC, TRC20 и т.д.)
+    address: Optional[str] = None  # Адрес
+    address_from: Optional[str] = None
+    address_to: Optional[str] = None
+    tag: Optional[str] = None  # Memo/Tag для XRP, EOS и т.д.
+    status: str = "pending"  # pending, ok, failed, canceled
+    txid: Optional[str] = None  # Хеш транзакции в блокчейне
+    tx_timestamp: Optional[datetime] = None  # Время транзакции
+    notified: bool = False  # Было ли отправлено уведомление
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class TransactionListResponse(BaseModel):
+    """Ответ со списком транзакций"""
+    
+    service: Optional[str] = None
+    tx_type: Optional[str] = None  # deposit, withdrawal или None для всех
+    transactions: list[TransactionSchema]
+    total_count: int
+    
+
+class TransactionsSummary(BaseModel):
+    """Сводка по транзакциям сервиса"""
+    
+    service: str
+    total_deposits: int
+    total_withdrawals: int
+    pending_deposits: int
+    pending_withdrawals: int
+    last_deposit: Optional[datetime] = None
+    last_withdrawal: Optional[datetime] = None
+
+
+class TransactionsRefreshResponse(BaseModel):
+    """Ответ на запрос обновления транзакций"""
+    
+    status: str
+    message: str
+    new_transactions: int
+    updated_transactions: int
+    services_checked: list[str]
+    failed_services: list[str]

@@ -41,6 +41,47 @@ class APIClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def get_transactions(
+        self,
+        service: Optional[str] = None,
+        tx_type: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Get transactions history"""
+        session = await self._get_session()
+        params = {"limit": limit}
+        if service:
+            params["service"] = service
+        if tx_type:
+            params["tx_type"] = tx_type
+        if status:
+            params["status"] = status
+        
+        async with session.get(f"{API_URL}/api/v1/transactions", params=params) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_deposits(self, service: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:
+        """Get deposits history"""
+        return await self.get_transactions(service=service, tx_type="deposit", limit=limit)
+
+    async def get_withdrawals(self, service: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:
+        """Get withdrawals history"""
+        return await self.get_transactions(service=service, tx_type="withdrawal", limit=limit)
+
+    async def refresh_transactions(self, since_hours: int = 168) -> Dict[str, Any]:
+        """Refresh transactions from all exchanges"""
+        session = await self._get_session()
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with session.post(
+            f"{API_URL}/api/v1/transactions/refresh",
+            params={"since_hours": since_hours},
+            timeout=timeout
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
