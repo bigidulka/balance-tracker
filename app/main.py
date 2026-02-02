@@ -45,10 +45,10 @@ async def background_refresh_loop():
             async with async_session_maker() as db:
                 service = BalanceService(db)
                 result = await service.get_all_balances(force_refresh=True)
-                # logger.info(
-                #     f"Background refresh completed: {len(result.services)} services, "
-                #     f"total: ${result.total_usd:.2f}"
-                # )
+                logger.info(
+                    f"Background refresh completed: {len(result.services)} services, "
+                    f"total: ${result.total_usd:.2f}"
+                )
         except asyncio.CancelledError:
             logger.info("Background refresh task cancelled")
             break

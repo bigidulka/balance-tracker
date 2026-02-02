@@ -134,7 +134,9 @@ class BalanceService:
             task_map[id(task)] = ("okx_wallet", account_id)
 
         if tasks:
+            logger.info(f"Gathering balances from {len(tasks)} sources...")
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info("Gathering balances completed")
 
             for task, result in zip(tasks, results):
                 source_type, source_id = task_map[id(task)]

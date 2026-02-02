@@ -40,12 +40,12 @@ def format_usd(value: float) -> str:
 
 def format_timestamp(data: Dict[str, Any]) -> str:
     """Format data freshness timestamp"""
-    # Get the oldest update time from services
+    # Get the latest update time from services
     services = data.get("services", [])
     if not services:
         return "No data"
 
-    oldest_time = None
+    latest_time = None
     for svc in services:
         updated_at = svc.get("updated_at")
         if updated_at:
@@ -55,20 +55,22 @@ def format_timestamp(data: Dict[str, Any]) -> str:
                     dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
                 else:
                     dt = updated_at
-                if oldest_time is None or dt < oldest_time:
-                    oldest_time = dt
+                
+                # We prefer the latest update time to show when the last refresh happened
+                if latest_time is None or dt > latest_time:
+                    latest_time = dt
             except Exception:
                 pass
 
-    if oldest_time is None:
+    if latest_time is None:
         return "Unknown"
 
     # Calculate age
     now = datetime.now(timezone.utc)
-    if oldest_time.tzinfo is None:
-        oldest_time = oldest_time.replace(tzinfo=timezone.utc)
+    if latest_time.tzinfo is None:
+        latest_time = latest_time.replace(tzinfo=timezone.utc)
 
-    age = now - oldest_time
+    age = now - latest_time
     minutes = int(age.total_seconds() / 60)
 
     if minutes < 1:

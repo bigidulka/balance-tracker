@@ -85,10 +85,12 @@ class BalanceRepository:
                     existing.accounts = accounts_data
                     existing.total_usd = total_usd
                     existing.actual = actual
+                    existing.updated_at = datetime.now(timezone.utc)
                     await self.session.commit()
                     return existing
                 else:
                     existing.actual = False
+                    existing.updated_at = datetime.now(timezone.utc)
                     await self.session.commit()
                     return existing
             else:
@@ -100,12 +102,14 @@ class BalanceRepository:
                 await self.session.commit()
                 return existing
         else:
+            now = datetime.now(timezone.utc)
             balance = Balance(
                 service=service,
                 assets=assets_data,
                 accounts=accounts_data,
                 total_usd=total_usd,
                 actual=actual,
+                updated_at=now,
             )
             self.session.add(balance)
 
@@ -114,6 +118,7 @@ class BalanceRepository:
                 assets=assets_data,
                 accounts=accounts_data,
                 total_usd=total_usd,
+                created_at=now,
             )
             self.session.add(history)
 
@@ -124,6 +129,7 @@ class BalanceRepository:
         balance = await self.get_latest_balance(service)
         if balance:
             balance.actual = False
+            balance.updated_at = datetime.now(timezone.utc)
             await self.session.commit()
         return balance
 
