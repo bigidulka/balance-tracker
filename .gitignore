@@ -42,3 +42,4 @@ env/
 .venv/
 
 api_keys.json
+data/balance_tracker.db

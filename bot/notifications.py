@@ -27,7 +27,17 @@ _processed_transactions: Dict[str, str] = {}
 
 # Биржи, для которых используется подход через изменение баланса (без API транзакций)
 # Для остальных бирж уведомления приходят через транзакции
-BALANCE_BASED_SERVICES = {"okx"}
+BALANCE_BASED_SERVICES = {"okx", "okx_wallet"}
+
+
+def _is_balance_based_service(service_name: str) -> bool:
+    """Проверяет, относится ли сервис к отслеживаемым через баланс"""
+    service_lower = service_name.lower()
+    # Точное совпадение или префикс (для okx_wallet_XXXX)
+    for svc in BALANCE_BASED_SERVICES:
+        if service_lower == svc or service_lower.startswith(f"{svc}_"):
+            return True
+    return False
 
 
 def _format_amount(amount: float, coin: str) -> str:
@@ -187,7 +197,7 @@ async def check_and_notify(bot: Bot) -> None:
             service_name = svc.get("service", "")
 
             # Обрабатываем ТОЛЬКО биржи из BALANCE_BASED_SERVICES
-            if service_name.lower() not in BALANCE_BASED_SERVICES:
+            if not _is_balance_based_service(service_name):
                 continue
 
             # Пропускаем если данные неактуальные (ошибка API, fallback)
