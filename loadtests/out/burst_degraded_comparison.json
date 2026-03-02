@@ -1,0 +1,68 @@
+{
+  "burst": {
+    "control": {
+      "iterations": 44,
+      "dropped_iterations": 13,
+      "http_req_failed_rate": 0.5945945945945946,
+      "checks_rate": 0.40540540540540543,
+      "http_req_duration_avg_ms": 6828.259217908111,
+      "http_req_duration_p95_ms": 10000.9884406,
+      "http_req_duration_p99_ms": 10001.13846588,
+      "refresh_passes": 0,
+      "refresh_fails": 44
+    },
+    "optimized": {
+      "iterations": 60,
+      "dropped_iterations": 0,
+      "http_req_failed_rate": 0.03333333333333333,
+      "checks_rate": 0.9666666666666667,
+      "http_req_duration_avg_ms": 1617.6126251791673,
+      "http_req_duration_p95_ms": 8452.626526649998,
+      "http_req_duration_p99_ms": 10000.87765565,
+      "refresh_passes": 52,
+      "refresh_fails": 8
+    },
+    "delta_pct": {
+      "iterations_pct": 36.36363636363637,
+      "dropped_iterations_pct": -100.0,
+      "http_req_failed_rate_pct": -94.39393939393939,
+      "checks_rate_pct": 138.44444444444443,
+      "http_req_duration_avg_ms_pct": -76.31002904903286,
+      "http_req_duration_p95_ms_pct": -15.482088826983084,
+      "http_req_duration_p99_ms_pct": -0.0026078054102524847
+    }
+  },
+  "degraded": {
+    "control": {
+      "iterations": 18,
+      "dropped_iterations": 10,
+      "http_req_failed_rate": 0.5128205128205128,
+      "checks_rate": 0.48717948717948717,
+      "http_req_duration_avg_ms": 6735.804690102566,
+      "http_req_duration_p95_ms": 10000.961198899999,
+      "http_req_duration_p99_ms": 10001.03125249,
+      "refresh_passes": 0,
+      "refresh_fails": 18
+    },
+    "optimized": {
+      "iterations": 31,
+      "dropped_iterations": 0,
+      "http_req_failed_rate": 0,
+      "checks_rate": 1,
+      "http_req_duration_avg_ms": 974.8602959838711,
+      "http_req_duration_p95_ms": 5121.673148049998,
+      "http_req_duration_p99_ms": 5729.785863689999,
+      "refresh_passes": 31,
+      "refresh_fails": 0
+    },
+    "delta_pct": {
+      "iterations_pct": 72.22222222222221,
+      "dropped_iterations_pct": -100.0,
+      "http_req_failed_rate_pct": -100.0,
+      "checks_rate_pct": 105.26315789473684,
+      "http_req_duration_avg_ms_pct": -85.52718879429048,
+      "http_req_duration_p95_ms_pct": -48.788190992948465,
+      "http_req_duration_p99_ms_pct": -42.7080496097497
+    }
+  }
+}

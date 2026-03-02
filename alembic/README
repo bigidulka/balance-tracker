@@ -1,0 +1,11 @@
+Alembic migration scaffold
+
+Usage examples:
+- alembic current
+- alembic upgrade head
+- alembic revision -m "add new index"
+
+Current baseline flow:
+1) Existing DBs created by SQLAlchemy metadata.create_all can be stamped to 20260226_0001.
+2) New DBs should use alembic upgrade head.
+3) Index additions are in 20260226_0002_add_hotspot_indexes.

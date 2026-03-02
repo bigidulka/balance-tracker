@@ -1,14 +1,16 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 import sys
 import time
-from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from io import StringIO
-from typing import Optional
+from time import perf_counter
+from time import monotonic
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 import ccxt.pro as ccxtpro
@@ -20,6 +22,7 @@ from app.schemas.balance import (
     ServiceBalanceSchema,
     TransactionSchema,
 )
+from app.services.metrics_service import metrics_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -42,35 +45,6 @@ for logger_name in [
     logging.getLogger(logger_name).propagate = False
 
 
-# NullWriter для подавления вывода
-class NullWriter:
-    """Поглощает весь вывод."""
-
-    def write(self, text):
-        pass
-
-    def flush(self):
-        pass
-
-
-# Глобально подавляем stdout/stderr на уровне модуля
-_null_writer = NullWriter()
-sys.stdout = _null_writer
-sys.stderr = _null_writer
-
-# Восстанавливаем для логгера - используем оригинальные потоки
-_original_stdout = sys.__stdout__
-_original_stderr = sys.__stderr__
-
-# Настраиваем handler который пишет в оригинальный stderr
-import logging.handlers
-
-_stream_handler = logging.StreamHandler(_original_stderr)
-_stream_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
-logging.getLogger().addHandler(_stream_handler)
-logging.getLogger().setLevel(logging.INFO)
 
 
 # Конфигурация типов счетов для каждой биржи
@@ -159,6 +133,15 @@ EXCHANGE_OPTIONS: dict[str, dict] = {
 # Биржи которые требуют прямого API запроса вместо CCXT
 DIRECT_API_EXCHANGES = {"bitmart"}
 
+T = TypeVar("T")
+
+
+@dataclass
+class _LimiterEntry:
+    semaphore: asyncio.Semaphore
+    last_used: float
+    in_flight: int = 0
+
 
 class CCXTManager:
     def __init__(self):
@@ -166,6 +149,188 @@ class CCXTManager:
         self._lock = asyncio.Lock()
         self._tickers_cache: dict[str, dict] = {}
         self._tickers_cache_time: dict[str, datetime] = {}
+        self._inflight: dict[str, asyncio.Task] = {}
+        self._inflight_lock = asyncio.Lock()
+        self._keyed_limiters: dict[str, _LimiterEntry] = {}
+        self._keyed_limiters_lock = asyncio.Lock()
+        self._keyed_limiters_max_size = 1024
+        self._keyed_limiters_idle_ttl_seconds = 15 * 60
+
+    def _hash_value(self, raw: str) -> str:
+        return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+    def _proxy_hash(self) -> str:
+        proxy = settings.proxy_url or ""
+        return self._hash_value(proxy)
+
+    def _api_key_hash(self, exchange_id: str) -> str:
+        api_key = settings.get_exchange_config(exchange_id).get("apiKey", "")
+        return self._hash_value(api_key)
+
+    def _routing_signature(self, exchange_id: str) -> str:
+        return (
+            f"exchange:{exchange_id}:proxy:{self._proxy_hash()}:api:{self._api_key_hash(exchange_id)}"
+        )
+
+    def _singleflight_key(self, operation: str, exchange_id: str, payload: dict) -> str:
+        payload_hash = self._hash_value(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        )
+        return f"{operation}:{self._routing_signature(exchange_id)}:payload:{payload_hash}"
+
+    def _since_bucket(self, since: Optional[datetime]) -> int | None:
+        if since is None:
+            return None
+        bucket_size = max(1, settings.transactions_singleflight_since_bucket_seconds)
+        return int(since.timestamp()) // bucket_size
+
+    async def _singleflight(self, key: str, runner: Callable[[], Awaitable[T]]) -> T:
+        if not settings.enable_ccxt_singleflight:
+            return await runner()
+
+        leader = False
+        wait_started = perf_counter()
+
+        async with self._inflight_lock:
+            task = self._inflight.get(key)
+            if task is None:
+                task = asyncio.create_task(runner())
+                self._inflight[key] = task
+                leader = True
+                metrics_service.inc("ccxt_singleflight_leader_total")
+            else:
+                metrics_service.inc("ccxt_singleflight_follower_total")
+
+        if not leader:
+            metrics_service.observe_duration(
+                "ccxt_singleflight_wait_seconds", perf_counter() - wait_started
+            )
+
+        try:
+            result = await asyncio.shield(task)
+            return result
+        except Exception:
+            metrics_service.inc("ccxt_singleflight_error_total")
+            raise
+        finally:
+            if leader:
+                async with self._inflight_lock:
+                    if self._inflight.get(key) is task:
+                        self._inflight.pop(key, None)
+
+    def _prune_keyed_limiters(self, now: float) -> None:
+        if not self._keyed_limiters:
+            return
+
+        idle_before = now - self._keyed_limiters_idle_ttl_seconds
+        stale_keys = [
+            key
+            for key, entry in self._keyed_limiters.items()
+            if entry.last_used < idle_before and entry.in_flight == 0
+        ]
+        for key in stale_keys:
+            self._keyed_limiters.pop(key, None)
+
+        max_size = self._keyed_limiters_max_size
+        if len(self._keyed_limiters) <= max_size:
+            return
+
+        removable = [
+            (key, entry.last_used)
+            for key, entry in self._keyed_limiters.items()
+            if entry.in_flight == 0
+        ]
+        removable.sort(key=lambda item: item[1])
+
+        overflow = len(self._keyed_limiters) - max_size
+        for key, _ in removable[:overflow]:
+            self._keyed_limiters.pop(key, None)
+
+    async def _run_with_backpressure(
+        self, key: str, runner: Callable[[], Awaitable[T]]
+    ) -> T:
+        if not settings.enable_ccxt_keyed_backpressure:
+            return await runner()
+
+        wait_started = perf_counter()
+        wait_timeout = max(0.05, settings.ccxt_backpressure_wait_timeout_seconds)
+
+        async with self._keyed_limiters_lock:
+            now = monotonic()
+            self._prune_keyed_limiters(now)
+            entry = self._keyed_limiters.get(key)
+            if entry is None:
+                entry = _LimiterEntry(
+                    semaphore=asyncio.Semaphore(max(1, settings.ccxt_keyed_parallelism)),
+                    last_used=now,
+                )
+                self._keyed_limiters[key] = entry
+            else:
+                entry.last_used = now
+
+        try:
+            await asyncio.wait_for(entry.semaphore.acquire(), timeout=wait_timeout)
+        except asyncio.TimeoutError as exc:
+            metrics_service.inc("ccxt_backpressure_rejected_total")
+            async with self._keyed_limiters_lock:
+                current = self._keyed_limiters.get(key)
+                if current is not None:
+                    current.last_used = monotonic()
+                    self._prune_keyed_limiters(current.last_used)
+            raise TimeoutError(f"Backpressure timeout for {key}") from exc
+
+        metrics_service.observe_duration(
+            "ccxt_backpressure_wait_seconds", perf_counter() - wait_started
+        )
+
+        async with self._keyed_limiters_lock:
+            current = self._keyed_limiters.get(key)
+            if current is not None:
+                current.in_flight += 1
+                current.last_used = monotonic()
+
+        try:
+            return await runner()
+        finally:
+            entry.semaphore.release()
+            async with self._keyed_limiters_lock:
+                current = self._keyed_limiters.get(key)
+                if current is not None:
+                    current.in_flight = max(0, current.in_flight - 1)
+                    current.last_used = monotonic()
+                    self._prune_keyed_limiters(current.last_used)
+
+    async def _run_exchange_call(
+        self,
+        exchange_id: str,
+        operation: str,
+        runner: Callable[[], Awaitable[T]],
+    ) -> T:
+        limit_key = f"{operation}:{self._routing_signature(exchange_id)}"
+
+        async def _timed_runner() -> T:
+            started = perf_counter()
+            try:
+                return await runner()
+            finally:
+                metrics_service.observe_duration(
+                    "ccxt_call_duration_seconds", perf_counter() - started
+                )
+
+        return await self._run_with_backpressure(limit_key, _timed_runner)
+
+    def _is_stablecoin(self, coin: str) -> bool:
+        return coin.upper() in {
+            "USDT",
+            "USDC",
+            "BUSD",
+            "USD",
+            "DAI",
+            "TUSD",
+            "USDP",
+            "FDUSD",
+            "USDD",
+        }
 
     async def _fetch_bitmart_balance_direct(self) -> ServiceBalanceSchema:
         """Прямой запрос к BitMart API (обходит баг CCXT с currencies)"""
@@ -238,6 +403,8 @@ class CCXTManager:
         # Обрабатываем балансы
         assets: list[AssetSchema] = []
         total_usd = 0.0
+        has_non_stable_assets = False
+        has_zero_valued_non_stable_assets = False
 
         for item in wallet:
             available = float(item.get("available", 0))
@@ -246,7 +413,14 @@ class CCXTManager:
 
             if total > 0:
                 coin = item.get("id", item.get("currency", "UNKNOWN"))
+                is_stablecoin = self._is_stablecoin(coin)
+                if not is_stablecoin:
+                    has_non_stable_assets = True
+
                 value_usd = await self._calculate_usd_value(coin, total, tickers)
+                if not is_stablecoin and value_usd == 0.0:
+                    has_zero_valued_non_stable_assets = True
+
                 total_usd += value_usd
                 assets.append(AssetSchema(coin=coin, amount=total, value_usd=value_usd))
 
@@ -260,13 +434,24 @@ class CCXTManager:
             else None
         )
 
+        degraded = (
+            has_non_stable_assets
+            and has_zero_valued_non_stable_assets
+            and not tickers
+        )
+        if degraded:
+            metrics_service.inc("ccxt_bitmart_ticker_degraded_total")
+            logger.warning(
+                "BitMart balance degraded: no tickers available, non-stable assets valued at 0"
+            )
+
         return ServiceBalanceSchema(
             service="bitmart",
             accounts=[account] if account else [],
             assets=assets,
             total_usd=total_usd,
             updated_at=datetime.now(timezone.utc),
-            actual=True,
+            actual=not degraded,
         )
 
     async def _get_exchange(self, exchange_id: str) -> ccxtpro.Exchange:
@@ -317,16 +502,27 @@ class CCXTManager:
         cache_time = self._tickers_cache_time.get(exchange_id)
 
         if cache_time and (now - cache_time).total_seconds() < 60:
+            metrics_service.inc("ccxt_tickers_cache_hit_total")
             return self._tickers_cache.get(exchange_id, {})
 
-        try:
-            tickers = await exchange.fetch_tickers()
-            self._tickers_cache[exchange_id] = tickers
-            self._tickers_cache_time[exchange_id] = now
-            return tickers
-        except Exception as e:
-            logger.debug(f"Could not fetch tickers for {exchange_id}: {e}")
-            return self._tickers_cache.get(exchange_id, {})
+        metrics_service.inc("ccxt_tickers_cache_miss_total")
+
+        async def _load_tickers() -> dict:
+            try:
+                tickers = await self._run_exchange_call(
+                    exchange_id,
+                    "tickers",
+                    lambda: exchange.fetch_tickers(),
+                )
+                self._tickers_cache[exchange_id] = tickers
+                self._tickers_cache_time[exchange_id] = datetime.now(timezone.utc)
+                return tickers
+            except Exception as e:
+                logger.debug(f"Could not fetch tickers for {exchange_id}: {e}")
+                return self._tickers_cache.get(exchange_id, {})
+
+        key = self._singleflight_key("tickers", exchange_id, {"ttl": 60})
+        return await self._singleflight(key, _load_tickers)
 
     async def _fetch_account_balance(
         self,
@@ -340,7 +536,11 @@ class CCXTManager:
         params = account_config.get("params", {})
 
         try:
-            balance = await exchange.fetch_balance(params)
+            balance = await self._run_exchange_call(
+                exchange_id,
+                "fetch_balance",
+                lambda: exchange.fetch_balance(params),
+            )
 
             assets: list[AssetSchema] = []
             total_usd = 0.0
@@ -388,95 +588,103 @@ class CCXTManager:
     async def fetch_balance(self, exchange_id: str) -> ServiceBalanceSchema:
         """Получает балансы со всех типов счетов биржи"""
 
-        # Используем прямой API для проблемных бирж
-        if exchange_id in DIRECT_API_EXCHANGES:
-            if exchange_id == "bitmart":
-                return await self._fetch_bitmart_balance_direct()
+        account_types = EXCHANGE_ACCOUNT_TYPES.get(
+            exchange_id, [{"type": "spot", "params": {}}]
+        )
+        key = self._singleflight_key(
+            "balance",
+            exchange_id,
+            {
+                "account_types": account_types,
+            },
+        )
 
-        exchange = await self._get_exchange(exchange_id)
-
-        try:
-            # Получаем тикеры один раз
-            tickers = await self._get_tickers(exchange, exchange_id)
-
-            # Получаем конфигурацию счетов для биржи
-            account_types = EXCHANGE_ACCOUNT_TYPES.get(
-                exchange_id, [{"type": "spot", "params": {}}]
-            )
-
-            # Агрегируем по типам: spot и futures
-            accounts_data: dict[str, dict[str, AssetSchema]] = {
-                "spot": {},
-                "futures": {},
-            }
-            accounts_totals: dict[str, float] = {
-                "spot": 0.0,
-                "futures": 0.0,
-            }
-
-            # Получаем балансы со всех типов счетов последовательно
-            for acc_config in account_types:
-                result = await self._fetch_account_balance(
-                    exchange, exchange_id, acc_config, tickers
+        async def _fetch_balance_impl() -> ServiceBalanceSchema:
+            if exchange_id in DIRECT_API_EXCHANGES and exchange_id == "bitmart":
+                return await self._run_exchange_call(
+                    exchange_id,
+                    "bitmart_direct_balance",
+                    self._fetch_bitmart_balance_direct,
                 )
-                if isinstance(result, AccountBalanceSchema) and result.assets:
-                    acc_type = result.account_type  # уже нормализован: spot или futures
 
-                    # Агрегируем активы по типу счёта
-                    for asset in result.assets:
-                        if asset.coin in accounts_data[acc_type]:
-                            existing = accounts_data[acc_type][asset.coin]
-                            accounts_data[acc_type][asset.coin] = AssetSchema(
-                                coin=asset.coin,
-                                amount=existing.amount + asset.amount,
-                                value_usd=existing.value_usd + asset.value_usd,
-                            )
-                        else:
-                            accounts_data[acc_type][asset.coin] = asset
+            exchange = await self._get_exchange(exchange_id)
 
-                    accounts_totals[acc_type] += result.total_usd
+            try:
+                tickers = await self._get_tickers(exchange, exchange_id)
 
-            # Формируем итоговые счета
-            accounts: list[AccountBalanceSchema] = []
-            all_assets: dict[str, AssetSchema] = {}
-            total_usd = 0.0
+                accounts_data: dict[str, dict[str, AssetSchema]] = {
+                    "spot": {},
+                    "futures": {},
+                }
+                accounts_totals: dict[str, float] = {
+                    "spot": 0.0,
+                    "futures": 0.0,
+                }
 
-            for acc_type in ["spot", "futures"]:
-                if accounts_data[acc_type]:
-                    assets_list = list(accounts_data[acc_type].values())
-                    accounts.append(
-                        AccountBalanceSchema(
-                            account_type=acc_type,
-                            assets=assets_list,
-                            total_usd=accounts_totals[acc_type],
-                        )
+                inter_account_delay = max(0.0, settings.ccxt_inter_account_delay_seconds)
+                for index, acc_config in enumerate(account_types):
+                    result = await self._fetch_account_balance(
+                        exchange, exchange_id, acc_config, tickers
                     )
-                    total_usd += accounts_totals[acc_type]
+                    if inter_account_delay > 0 and index < len(account_types) - 1:
+                        await asyncio.sleep(inter_account_delay)
+                    if isinstance(result, AccountBalanceSchema) and result.assets:
+                        acc_type = result.account_type
 
-                    # Общий список активов
-                    for asset in assets_list:
-                        if asset.coin in all_assets:
-                            existing = all_assets[asset.coin]
-                            all_assets[asset.coin] = AssetSchema(
-                                coin=asset.coin,
-                                amount=existing.amount + asset.amount,
-                                value_usd=existing.value_usd + asset.value_usd,
+                        for asset in result.assets:
+                            if asset.coin in accounts_data[acc_type]:
+                                existing = accounts_data[acc_type][asset.coin]
+                                accounts_data[acc_type][asset.coin] = AssetSchema(
+                                    coin=asset.coin,
+                                    amount=existing.amount + asset.amount,
+                                    value_usd=existing.value_usd + asset.value_usd,
+                                )
+                            else:
+                                accounts_data[acc_type][asset.coin] = asset
+
+                        accounts_totals[acc_type] += result.total_usd
+
+                accounts: list[AccountBalanceSchema] = []
+                all_assets: dict[str, AssetSchema] = {}
+                total_usd = 0.0
+
+                for acc_type in ["spot", "futures"]:
+                    if accounts_data[acc_type]:
+                        assets_list = list(accounts_data[acc_type].values())
+                        accounts.append(
+                            AccountBalanceSchema(
+                                account_type=acc_type,
+                                assets=assets_list,
+                                total_usd=accounts_totals[acc_type],
                             )
-                        else:
-                            all_assets[asset.coin] = asset
+                        )
+                        total_usd += accounts_totals[acc_type]
 
-            return ServiceBalanceSchema(
-                service=exchange_id,
-                accounts=accounts,
-                assets=list(all_assets.values()),
-                total_usd=total_usd,
-                updated_at=datetime.now(timezone.utc),
-                actual=True,
-            )
+                        for asset in assets_list:
+                            if asset.coin in all_assets:
+                                existing = all_assets[asset.coin]
+                                all_assets[asset.coin] = AssetSchema(
+                                    coin=asset.coin,
+                                    amount=existing.amount + asset.amount,
+                                    value_usd=existing.value_usd + asset.value_usd,
+                                )
+                            else:
+                                all_assets[asset.coin] = asset
 
-        except Exception as e:
-            logger.error(f"Error fetching balance from {exchange_id}: {e}")
-            raise
+                return ServiceBalanceSchema(
+                    service=exchange_id,
+                    accounts=accounts,
+                    assets=list(all_assets.values()),
+                    total_usd=total_usd,
+                    updated_at=datetime.now(timezone.utc),
+                    actual=True,
+                )
+
+            except Exception as e:
+                logger.error(f"Error fetching balance from {exchange_id}: {e}")
+                raise
+
+        return await self._singleflight(key, _fetch_balance_impl)
 
     async def _calculate_usd_value(
         self, coin: str, amount: float, tickers: dict
@@ -536,13 +744,19 @@ class CCXTManager:
         if exchange_ids is None:
             exchange_ids = settings.get_active_exchanges()
 
+        max_exchanges = settings.ccxt_max_exchanges_per_cycle
+        if max_exchanges > 0:
+            exchange_ids = exchange_ids[:max_exchanges]
+
         results = {}
+        per_exchange_timeout = max(0.1, settings.ccxt_balance_call_timeout_seconds)
+        inter_exchange_delay = max(0.0, settings.ccxt_inter_exchange_delay_seconds)
 
         # Запускаем запросы последовательно чтобы избежать rate limit
-        for exchange_id in exchange_ids:
+        for index, exchange_id in enumerate(exchange_ids):
             try:
                 results[exchange_id] = await asyncio.wait_for(
-                    self.fetch_balance(exchange_id), timeout=settings.request_timeout
+                    self.fetch_balance(exchange_id), timeout=per_exchange_timeout
                 )
             except asyncio.TimeoutError:
                 logger.error(f"Timeout fetching balance from {exchange_id}")
@@ -550,6 +764,9 @@ class CCXTManager:
             except Exception as e:
                 logger.error(f"Failed to fetch balance from {exchange_id}: {e}")
                 results[exchange_id] = e
+
+            if inter_exchange_delay > 0 and index < len(exchange_ids) - 1:
+                await asyncio.sleep(inter_exchange_delay)
 
         return results
 
@@ -630,8 +847,12 @@ class CCXTManager:
         try:
             since_ts = int(since.timestamp() * 1000) if since else None
 
-            raw_deposits = await exchange.fetch_deposits(
-                code=None, since=since_ts, limit=limit  # Все валюты
+            raw_deposits = await self._run_exchange_call(
+                exchange_id,
+                "fetch_deposits",
+                lambda: exchange.fetch_deposits(
+                    code=None, since=since_ts, limit=limit  # Все валюты
+                ),
             )
 
             deposits = []
@@ -674,8 +895,12 @@ class CCXTManager:
         try:
             since_ts = int(since.timestamp() * 1000) if since else None
 
-            raw_withdrawals = await exchange.fetch_withdrawals(
-                code=None, since=since_ts, limit=limit  # Все валюты
+            raw_withdrawals = await self._run_exchange_call(
+                exchange_id,
+                "fetch_withdrawals",
+                lambda: exchange.fetch_withdrawals(
+                    code=None, since=since_ts, limit=limit  # Все валюты
+                ),
             )
 
             withdrawals = []
@@ -708,18 +933,28 @@ class CCXTManager:
     ) -> list[TransactionSchema]:
         """Получает все транзакции (deposits + withdrawals) для биржи"""
 
-        deposits = await self.fetch_deposits(exchange_id, since, limit)
-        withdrawals = await self.fetch_withdrawals(exchange_id, since, limit)
-
-        all_transactions = deposits + withdrawals
-
-        # Сортируем по времени (новые первые)
-        all_transactions.sort(
-            key=lambda x: x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
+        singleflight_key = self._singleflight_key(
+            "transactions",
+            exchange_id,
+            {
+                "since_bucket": self._since_bucket(since),
+                "limit": limit,
+            },
         )
 
-        return all_transactions
+        async def _fetch_transactions_impl() -> list[TransactionSchema]:
+            deposits = await self.fetch_deposits(exchange_id, since, limit)
+            withdrawals = await self.fetch_withdrawals(exchange_id, since, limit)
+
+            all_transactions = deposits + withdrawals
+
+            all_transactions.sort(
+                key=lambda x: x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
+            return all_transactions
+
+        return await self._singleflight(singleflight_key, _fetch_transactions_impl)
 
     async def fetch_transactions_all_exchanges(
         self,
@@ -732,20 +967,34 @@ class CCXTManager:
         if exchange_ids is None:
             exchange_ids = settings.get_active_exchanges()
 
-        results = {}
+        max_exchanges = settings.ccxt_max_exchanges_per_cycle
+        if max_exchanges > 0:
+            exchange_ids = exchange_ids[:max_exchanges]
 
-        for exchange_id in exchange_ids:
-            try:
-                results[exchange_id] = await asyncio.wait_for(
-                    self.fetch_all_transactions(exchange_id, since, limit),
-                    timeout=settings.request_timeout,
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout fetching transactions from {exchange_id}")
-                results[exchange_id] = TimeoutError(f"Timeout for {exchange_id}")
-            except Exception as e:
-                logger.error(f"Failed to fetch transactions from {exchange_id}: {e}")
-                results[exchange_id] = e
+        timeout_seconds = max(0.1, float(settings.request_timeout))
+        parallelism = max(1, settings.exchange_parallelism)
+        semaphore = asyncio.Semaphore(parallelism)
+
+        async def _fetch_one(exchange_id: str):
+            async with semaphore:
+                try:
+                    txs = await asyncio.wait_for(
+                        self.fetch_all_transactions(exchange_id, since, limit),
+                        timeout=timeout_seconds,
+                    )
+                    return exchange_id, txs
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout fetching transactions from {exchange_id}")
+                    return exchange_id, TimeoutError(f"Timeout for {exchange_id}")
+                except Exception as exc:
+                    logger.error(f"Failed to fetch transactions from {exchange_id}: {exc}")
+                    return exchange_id, exc
+
+        fetch_tasks = [_fetch_one(exchange_id) for exchange_id in exchange_ids]
+        results: dict[str, list[TransactionSchema] | Exception] = {}
+
+        for exchange_id, result in await asyncio.gather(*fetch_tasks):
+            results[exchange_id] = result
 
         return results
 

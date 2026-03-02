@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -66,6 +66,21 @@ class HealthResponse(BaseModel):
     services: list[ServiceHealthSchema]
     total_services: int
     healthy_services: int
+
+
+class DashboardSummaryResponse(BaseModel):
+    total_usd: float
+    exchanges_count: int
+    spot_total: float
+    futures_total: float
+    dex_total: float
+    freshness: str
+    plan: dict[str, Any]
+    capabilities: dict[str, Any]
+    throttling: dict[str, Any]
+    integrations: dict[str, int]
+    transactions_24h: dict[str, int]
+    timestamp: datetime
 
 
 # ==================== Transaction Schemas ====================

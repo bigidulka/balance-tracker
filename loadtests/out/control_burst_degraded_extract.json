@@ -1,0 +1,24 @@
+{
+  "control_burst": {
+    "iterations": 44,
+    "dropped_iterations": 13,
+    "http_req_failed_rate": 0.5945945945945946,
+    "checks_rate": 0.40540540540540543,
+    "http_req_duration_avg_ms": 6828.259217908111,
+    "http_req_duration_p95_ms": 10000.9884406,
+    "http_req_duration_p99_ms": 10001.13846588,
+    "refresh_passes": 0,
+    "refresh_fails": 44
+  },
+  "control_degraded": {
+    "iterations": 18,
+    "dropped_iterations": 10,
+    "http_req_failed_rate": 0.5128205128205128,
+    "checks_rate": 0.48717948717948717,
+    "http_req_duration_avg_ms": 6735.804690102566,
+    "http_req_duration_p95_ms": 10000.961198899999,
+    "http_req_duration_p99_ms": 10001.03125249,
+    "refresh_passes": 0,
+    "refresh_fails": 18
+  }
+}

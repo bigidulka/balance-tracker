@@ -1,0 +1,87 @@
+{
+  "scenario": "single_user_strict_one_exchange_normal_load",
+  "base_url": "http://127.0.0.1:18012",
+  "pid": 1966555,
+  "started_at_epoch": 1772195422.8469486,
+  "steps": [
+    {
+      "path": "/api/v1/health",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.03,
+      "p50_ms": 2.97,
+      "p95_ms": 3.84,
+      "max_ms": 4.04
+    },
+    {
+      "path": "/api/v1/balances/cached",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.97,
+      "p50_ms": 3.7,
+      "p95_ms": 4.78,
+      "max_ms": 7.09
+    },
+    {
+      "path": "/api/v1/transactions?limit=50&offset=0",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 5.46,
+      "p50_ms": 4.8,
+      "p95_ms": 9.25,
+      "max_ms": 9.96
+    }
+  ],
+  "memory_before": {
+    "VmRSS_kB": 158508,
+    "VmHWM_kB": 158508,
+    "Threads": 7,
+    "voluntary_ctxt_switches": 953,
+    "nonvoluntary_ctxt_switches": 132
+  },
+  "warm_force_refresh": {
+    "status": 200,
+    "duration_ms": 22.99,
+    "services_count": 0,
+    "services": [],
+    "total_usd": 0.0
+  },
+  "memory_after_warm": {
+    "VmRSS_kB": 158540,
+    "VmHWM_kB": 158540,
+    "Threads": 7,
+    "voluntary_ctxt_switches": 972,
+    "nonvoluntary_ctxt_switches": 132
+  },
+  "memory_after_reads": {
+    "VmRSS_kB": 158900,
+    "VmHWM_kB": 158900,
+    "Threads": 7,
+    "voluntary_ctxt_switches": 2433,
+    "nonvoluntary_ctxt_switches": 185
+  },
+  "manual_refresh_once": {
+    "status": 200,
+    "duration_ms": 4.47,
+    "services_count": 0
+  },
+  "post_refresh_cached": {
+    "status": 200,
+    "duration_ms": 4.44,
+    "services_count": 0
+  },
+  "memory_after_all": {
+    "VmRSS_kB": 158904,
+    "VmHWM_kB": 158904,
+    "Threads": 7,
+    "voluntary_ctxt_switches": 2475,
+    "nonvoluntary_ctxt_switches": 187
+  },
+  "finished_at_epoch": 1772195423.132423
+}

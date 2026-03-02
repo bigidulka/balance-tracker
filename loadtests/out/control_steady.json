@@ -1,0 +1,171 @@
+{
+    "metrics": {
+        "http_req_waiting": {
+            "avg": 2740.452701044644,
+            "min": 2.597699,
+            "med": 20.661004,
+            "p(90)": 10000.8000028,
+            "p(95)": 10001.03695125,
+            "p(99)": 10001.157554090001,
+            "max": 10001.180414
+        },
+        "http_reqs": {
+            "count": 112,
+            "rate": 2.7951630507714564
+        },
+        "http_req_blocked": {
+            "med": 0.0035310000000000003,
+            "p(90)": 0.2190803,
+            "p(95)": 0.27046914999999977,
+            "p(99)": 0.36987957,
+            "max": 0.37696,
+            "avg": 0.06065909821428571,
+            "min": 0.002094
+        },
+        "iteration_duration": {
+            "max": 13729.038363,
+            "avg": 10963.12853025,
+            "min": 10014.632107,
+            "med": 10702.463967,
+            "p(90)": 12580.2451929,
+            "p(95)": 12951.524816250001,
+            "p(99)": 13550.8100238
+        },
+        "checks": {
+            "passes": 84,
+            "fails": 28,
+            "thresholds": {
+                "rate>0.99": true
+            },
+            "value": 0.75
+        },
+        "http_req_receiving": {
+            "med": 0.0712045,
+            "p(90)": 0.11831630000000003,
+            "p(95)": 0.13842234999999986,
+            "p(99)": 0.27853515000000006,
+            "max": 0.38749,
+            "avg": 0.0690930892857143,
+            "min": 0
+        },
+        "data_sent": {
+            "count": 36701,
+            "rate": 915.9399921996717
+        },
+        "dropped_iterations": {
+            "count": 3,
+            "rate": 0.07487043885994973
+        },
+        "http_req_failed": {
+            "passes": 28,
+            "fails": 84,
+            "thresholds": {
+                "rate<0.01": true
+            },
+            "value": 0.25
+        },
+        "http_req_duration{expected_response:true}": {
+            "avg": 320.47440697619044,
+            "min": 2.698199,
+            "med": 10.909186,
+            "p(90)": 1030.1253198,
+            "p(95)": 1981.8502426999983,
+            "p(99)": 3153.322954320001,
+            "max": 3681.598363
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "max": 0
+        },
+        "vus": {
+            "value": 3,
+            "min": 1,
+            "max": 12
+        },
+        "http_req_connecting": {
+            "avg": 0.042622928571428575,
+            "min": 0,
+            "med": 0,
+            "p(90)": 0.16191740000000002,
+            "p(95)": 0.19713879999999986,
+            "p(99)": 0.27548576,
+            "max": 0.280438
+        },
+        "vus_max": {
+            "min": 10,
+            "max": 13,
+            "value": 13
+        },
+        "iterations": {
+            "count": 28,
+            "rate": 0.6987907626928641
+        },
+        "http_req_sending": {
+            "p(99)": 0.07603983000000002,
+            "max": 0.077857,
+            "avg": 0.0230194375,
+            "min": 0.009548,
+            "med": 0.017263,
+            "p(90)": 0.0433959,
+            "p(95)": 0.05267594999999999
+        },
+        "http_req_duration": {
+            "p(95)": 10001.055126750001,
+            "p(99)": 10001.17124714,
+            "max": 10001.197026,
+            "avg": 2740.5448135714287,
+            "min": 2.698199,
+            "med": 20.759169,
+            "p(90)": 10000.811984,
+            "thresholds": {
+                "p(95)<1500": true,
+                "p(99)<2500": true
+            }
+        },
+        "data_received": {
+            "count": 406563,
+            "rate": 10146.516744739247
+        }
+    },
+    "root_group": {
+        "checks": {
+            "balances/cached status is 200": {
+                "fails": 0,
+                "name": "balances/cached status is 200",
+                "path": "::balances/cached status is 200",
+                "id": "13041120411b3ca5fdbe764175f1f3ff",
+                "passes": 28
+            },
+            "transactions status is 200": {
+                "passes": 28,
+                "fails": 0,
+                "name": "transactions status is 200",
+                "path": "::transactions status is 200",
+                "id": "91d82f6b99ca0b404d422019a5bd1cbe"
+            },
+            "health status is 200": {
+                "name": "health status is 200",
+                "path": "::health status is 200",
+                "id": "ab698ad652ee317628077e42e47eda00",
+                "passes": 28,
+                "fails": 0
+            },
+            "balances force refresh status is 200": {
+                "name": "balances force refresh status is 200",
+                "path": "::balances force refresh status is 200",
+                "id": "59087c8e739ef030f3fadb17fd567b34",
+                "passes": 0,
+                "fails": 28
+            }
+        },
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {}
+    }
+}

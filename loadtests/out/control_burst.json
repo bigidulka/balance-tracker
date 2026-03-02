@@ -1,0 +1,171 @@
+{
+    "metrics": {
+        "http_req_receiving": {
+            "p(90)": 0.0953232,
+            "p(95)": 0.1313207999999997,
+            "p(99)": 0.2356763199999999,
+            "max": 0.582527,
+            "avg": 0.03945636216216217,
+            "min": 0,
+            "med": 0
+        },
+        "dropped_iterations": {
+            "count": 13,
+            "rate": 0.18571294659128867
+        },
+        "http_req_failed": {
+            "passes": 110,
+            "fails": 75,
+            "thresholds": {
+                "rate<0.02": true
+            },
+            "value": 0.5945945945945946
+        },
+        "vus_max": {
+            "value": 33,
+            "min": 20,
+            "max": 33
+        },
+        "http_req_connecting": {
+            "min": 0,
+            "med": 0.120116,
+            "p(90)": 0.1887972,
+            "p(95)": 0.2091541999999999,
+            "p(99)": 0.42286259999999987,
+            "max": 1.170674,
+            "avg": 0.10099258378378376
+        },
+        "checks": {
+            "passes": 75,
+            "fails": 110,
+            "thresholds": {
+                "rate>0.98": true
+            },
+            "value": 0.40540540540540543
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(95)": 8965.625324,
+            "p(99)": 9842.36856086,
+            "max": 9983.297499,
+            "avg": 2175.5497691333335,
+            "min": 2.561432,
+            "med": 64.72429,
+            "p(90)": 7740.217397200001
+        },
+        "http_req_blocked": {
+            "med": 0.17004,
+            "p(90)": 0.264578,
+            "p(95)": 0.2859243999999999,
+            "p(99)": 0.6197441999999974,
+            "max": 6.25823,
+            "avg": 0.17015336216216212,
+            "min": 0.001673
+        },
+        "vus": {
+            "min": 0,
+            "max": 32,
+            "value": 3
+        },
+        "http_req_duration": {
+            "min": 2.561432,
+            "med": 10000.175685,
+            "p(90)": 10000.8850024,
+            "p(95)": 10000.9884406,
+            "p(99)": 10001.13846588,
+            "max": 10001.712126,
+            "avg": 6828.259217908111,
+            "thresholds": {
+                "p(95)<2500": true,
+                "p(99)<4000": true
+            }
+        },
+        "http_req_waiting": {
+            "avg": 6828.187527983783,
+            "min": 2.494326,
+            "med": 10000.14638,
+            "p(90)": 10000.8628284,
+            "p(95)": 10000.9516572,
+            "p(99)": 10001.117093640001,
+            "max": 10001.679845
+        },
+        "iteration_duration": {
+            "max": 40004.160106,
+            "avg": 26896.336387750005,
+            "min": 10013.59993,
+            "med": 33311.523846000004,
+            "p(90)": 40003.279749400004,
+            "p(95)": 40003.437863549996,
+            "p(99)": 40003.8674867
+        },
+        "iterations": {
+            "count": 44,
+            "rate": 0.628566896155131
+        },
+        "http_reqs": {
+            "count": 185,
+            "rate": 2.6428380861068
+        },
+        "data_sent": {
+            "count": 61585,
+            "rate": 879.7793704480395
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "max": 0
+        },
+        "http_req_sending": {
+            "med": 0.029365,
+            "p(90)": 0.055449,
+            "p(95)": 0.06625879999999998,
+            "p(99)": 0.0942452,
+            "max": 0.122961,
+            "avg": 0.03223356216216217,
+            "min": 0.007244
+        },
+        "data_received": {
+            "rate": 1605.402709614033,
+            "count": 112379
+        }
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "balances/cached status is 200": {
+                    "name": "balances/cached status is 200",
+                    "path": "::balances/cached status is 200",
+                    "id": "13041120411b3ca5fdbe764175f1f3ff",
+                    "passes": 17,
+                    "fails": 30
+                },
+                "transactions status is 200": {
+                    "name": "transactions status is 200",
+                    "path": "::transactions status is 200",
+                    "id": "91d82f6b99ca0b404d422019a5bd1cbe",
+                    "passes": 23,
+                    "fails": 24
+                },
+                "health status is 200": {
+                    "fails": 12,
+                    "name": "health status is 200",
+                    "path": "::health status is 200",
+                    "id": "ab698ad652ee317628077e42e47eda00",
+                    "passes": 35
+                },
+                "balances force refresh status is 200": {
+                    "passes": 0,
+                    "fails": 44,
+                    "name": "balances force refresh status is 200",
+                    "path": "::balances force refresh status is 200",
+                    "id": "59087c8e739ef030f3fadb17fd567b34"
+                }
+            }
+    }
+}

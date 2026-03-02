@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot
 
-from bot.config import ALLOWED_USERS, MIN_STABLECOIN_CHANGE, MIN_TOKEN_CHANGE_PERCENT
+from bot.config import settings
 from bot.api_client import api_client
+from bot.services.runtime import get_notification_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +103,13 @@ def _should_notify(coin: str, old_amount: float, new_amount: float) -> bool:
 
     # Для стейблкоинов - минимум $1 изменение
     if coin in STABLECOINS:
-        return diff >= MIN_STABLECOIN_CHANGE
+        return diff >= settings.min_stablecoin_change
 
     # Для других токенов - минимум X% от текущего или предыдущего баланса
     max_balance = max(old_amount, new_amount)
     if max_balance > 0:
         percent_change = (diff / max_balance) * 100  # в процентах
-        return percent_change >= MIN_TOKEN_CHANGE_PERCENT
+        return percent_change >= settings.min_token_change_percent
 
     return False
 
@@ -248,7 +249,7 @@ async def check_and_notify(bot: Bot) -> None:
                 message = _format_notification(service_name, changes)
 
                 # Отправляем уведомление всем разрешённым пользователям
-                for user_id in ALLOWED_USERS:
+                for user_id in get_notification_recipients():
                     try:
                         await bot.send_message(user_id, message, parse_mode="HTML")
                     except Exception as e:
@@ -411,7 +412,7 @@ async def check_and_notify_transactions(bot: Bot) -> None:
             # Отправляем уведомление
             message = _format_transaction_notification(tx)
 
-            for user_id in ALLOWED_USERS:
+            for user_id in get_notification_recipients():
                 try:
                     await bot.send_message(user_id, message, parse_mode="HTML")
                 except Exception as e:

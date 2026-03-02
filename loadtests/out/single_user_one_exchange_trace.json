@@ -1,0 +1,102 @@
+{
+  "scenario": "single_user_one_exchange_normal_load",
+  "base_url": "http://127.0.0.1:18010",
+  "pid": 1949179,
+  "started_at_epoch": 1772195175.0663102,
+  "steps": [
+    {
+      "path": "/api/v1/health",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.32,
+      "p50_ms": 3.32,
+      "p95_ms": 4.08,
+      "max_ms": 4.19
+    },
+    {
+      "path": "/api/v1/balances/cached",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 6.15,
+      "p50_ms": 6.13,
+      "p95_ms": 6.99,
+      "max_ms": 7.87
+    },
+    {
+      "path": "/api/v1/transactions?limit=50&offset=0",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.9,
+      "p50_ms": 3.85,
+      "p95_ms": 4.58,
+      "max_ms": 4.66
+    }
+  ],
+  "memory_before": {
+    "VmRSS_kB": 614568,
+    "VmHWM_kB": 614568,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 10858,
+    "nonvoluntary_ctxt_switches": 899
+  },
+  "warm_force_refresh": {
+    "status": 200,
+    "duration_ms": 8524.0,
+    "services_count": 14,
+    "services": [
+      "binance",
+      "bitget",
+      "bybit",
+      "gateio",
+      "htx",
+      "kucoin",
+      "mexc",
+      "okx",
+      "poloniex",
+      "lbank",
+      "coinex",
+      "bingx",
+      "xt",
+      "okx_wallet_6555B26D"
+    ],
+    "total_usd": 5435.863714259353
+  },
+  "memory_after_warm": {
+    "VmRSS_kB": 629500,
+    "VmHWM_kB": 629500,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 14637,
+    "nonvoluntary_ctxt_switches": 1129
+  },
+  "memory_after_reads": {
+    "VmRSS_kB": 629580,
+    "VmHWM_kB": 629580,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 16091,
+    "nonvoluntary_ctxt_switches": 1169
+  },
+  "manual_refresh_once": {
+    "status": 200,
+    "duration_ms": 5062.75,
+    "services_count": 14
+  },
+  "post_refresh_cached": {
+    "status": 200,
+    "duration_ms": 6.66,
+    "services_count": 14
+  },
+  "memory_after_all": {
+    "VmRSS_kB": 630620,
+    "VmHWM_kB": 630620,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 19095,
+    "nonvoluntary_ctxt_switches": 1365
+  },
+  "finished_at_epoch": 1772195188.9436538
+}

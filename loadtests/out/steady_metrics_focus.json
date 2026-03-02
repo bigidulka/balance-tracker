@@ -1,0 +1,23 @@
+{
+  "control_metrics_after": {
+    "singleflight_leader_total": 0,
+    "singleflight_follower_total": 0,
+    "singleflight_error_total": 0,
+    "tickers_cache_hit_total": 184,
+    "tickers_cache_miss_total": 180,
+    "singleflight_wait_count": 0,
+    "backpressure_wait_count": 0,
+    "ccxt_call_duration_count": 1048
+  },
+  "optimized_metrics_after": {
+    "singleflight_leader_total": 264,
+    "singleflight_follower_total": 198,
+    "singleflight_error_total": 29,
+    "tickers_cache_hit_total": 129,
+    "tickers_cache_miss_total": 56,
+    "singleflight_wait_count": 198,
+    "backpressure_wait_count": 456,
+    "ccxt_call_duration_count": 456
+  },
+  "optimized_follower_to_leader_ratio": 0.75
+}
