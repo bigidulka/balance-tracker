@@ -8,3 +8,13 @@ htmlcov/
 .vscode/
 venv/
 .venv/
+
+.env
+.env.local
+.env.*
+!.env.example
+!**/.env.example
+
+api_keys.json
+data/*.db
+data/*.sqlite*

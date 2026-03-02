@@ -1,0 +1,89 @@
+{
+  "scenario": "single_user_binance_profile_normal_load",
+  "base_url": "http://127.0.0.1:18013",
+  "pid": 1968616,
+  "started_at_epoch": 1772195586.7716508,
+  "steps": [
+    {
+      "path": "/api/v1/health",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.54,
+      "p50_ms": 3.41,
+      "p95_ms": 5.05,
+      "max_ms": 5.22
+    },
+    {
+      "path": "/api/v1/balances/cached",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 3.92,
+      "p50_ms": 3.69,
+      "p95_ms": 5.27,
+      "max_ms": 6.15
+    },
+    {
+      "path": "/api/v1/transactions?limit=50&offset=0",
+      "count": 20,
+      "status_counts": {
+        "200": 20
+      },
+      "avg_ms": 4.44,
+      "p50_ms": 4.21,
+      "p95_ms": 5.95,
+      "max_ms": 7.27
+    }
+  ],
+  "memory_before": {
+    "VmRSS_kB": 158544,
+    "VmHWM_kB": 158544,
+    "Threads": 7,
+    "voluntary_ctxt_switches": 1935,
+    "nonvoluntary_ctxt_switches": 208
+  },
+  "warm_force_refresh": {
+    "status": 200,
+    "duration_ms": 7147.2,
+    "services_count": 1,
+    "services": [
+      "binance"
+    ],
+    "total_usd": 0.01366988
+  },
+  "memory_after_warm": {
+    "VmRSS_kB": 288876,
+    "VmHWM_kB": 288876,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 3510,
+    "nonvoluntary_ctxt_switches": 319
+  },
+  "memory_after_reads": {
+    "VmRSS_kB": 288920,
+    "VmHWM_kB": 288920,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 4969,
+    "nonvoluntary_ctxt_switches": 357
+  },
+  "manual_refresh_once": {
+    "status": 200,
+    "duration_ms": 2281.27,
+    "services_count": 1
+  },
+  "post_refresh_cached": {
+    "status": 200,
+    "duration_ms": 4.72,
+    "services_count": 1
+  },
+  "memory_after_all": {
+    "VmRSS_kB": 289288,
+    "VmHWM_kB": 289288,
+    "Threads": 9,
+    "voluntary_ctxt_switches": 5563,
+    "nonvoluntary_ctxt_switches": 371
+  },
+  "finished_at_epoch": 1772195596.4470537
+}

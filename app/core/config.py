@@ -13,7 +13,21 @@ class ExchangeKeys(BaseSettings):
 
 
 class Settings(BaseSettings):
-    database_url: str = Field(default="sqlite+aiosqlite:///./data/balance_tracker.db")
+    database_url: str = Field(default="")
+    database_use_sqlite: bool = Field(default=False)
+    sqlite_database_url: str = Field(default="sqlite+aiosqlite:///./data/balance_tracker.db")
+    postgres_host: str = Field(default="postgres")
+    postgres_port: int = Field(default=5432)
+    postgres_db: str = Field(default="balance_tracker")
+    postgres_user: str = Field(default="balance_tracker")
+    postgres_password: str = Field(default="balance_tracker")
+    db_pool_size: int = Field(default=10)
+    db_max_overflow: int = Field(default=20)
+    db_pool_timeout: int = Field(default=30)
+    db_pool_recycle: int = Field(default=1800)
+
+    cors_allow_origins: str = Field(default='["http://localhost:3000"]')
+    default_org_id: int = Field(default=1)
 
     proxy_host: str = Field(default="")
     proxy_port: int = Field(default=3128)
@@ -71,9 +85,60 @@ class Settings(BaseSettings):
     )
 
     balance_cache_ttl: int = Field(default=60)
+    balance_cache_hard_ttl: int = Field(default=120)
     request_timeout: int = Field(default=30)
+    ccxt_balance_call_timeout_seconds: float = Field(default=30.0)
+    ccxt_inter_account_delay_seconds: float = Field(default=0.0)
+    ccxt_inter_exchange_delay_seconds: float = Field(default=0.0)
+    ccxt_max_exchanges_per_cycle: int = Field(default=0)
+    ccxt_keyed_parallelism: int = Field(default=2)
+    ccxt_backpressure_wait_timeout_seconds: float = Field(default=2.0)
+    transactions_singleflight_since_bucket_seconds: int = Field(default=60)
+    integration_secret_key: str = Field(default="")
+
+    enable_inprocess_refresh_loop: bool = Field(default=True)
+    enable_worker: bool = Field(default=False)
+    enable_ccxt_singleflight: bool = Field(default=False)
+    enable_ccxt_stale_revalidate: bool = Field(default=False)
+    enable_ccxt_keyed_backpressure: bool = Field(default=False)
+    enable_syncjob_dedupe: bool = Field(default=False)
+    enable_shared_cache_l2: bool = Field(default=False)
+    exchange_parallelism: int = Field(default=8)
+    job_parallelism: int = Field(default=2)
+
+    # Legacy aliases kept for backward compatibility during rollout.
+    enable_legacy_background_refresh_loop: Optional[bool] = Field(default=None)
+    enable_inprocess_sync_worker: Optional[bool] = Field(default=None)
+    sync_worker_poll_interval_seconds: float = Field(default=2.0)
+
+    jwt_secret_key: str = Field(default="dev-change-me")
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_access_token_expire_minutes: int = Field(default=60 * 24)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    @property
+    def resolved_database_url(self) -> str:
+        if self.database_url:
+            return self.database_url
+        if self.database_use_sqlite:
+            return self.sqlite_database_url
+        return (
+            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def legacy_background_refresh_loop_enabled(self) -> bool:
+        if self.enable_legacy_background_refresh_loop is not None:
+            return self.enable_legacy_background_refresh_loop
+        return self.enable_inprocess_refresh_loop
+
+    @property
+    def inprocess_sync_worker_enabled(self) -> bool:
+        if self.enable_inprocess_sync_worker is not None:
+            return self.enable_inprocess_sync_worker
+        return self.enable_worker
 
     @property
     def proxy_url(self) -> Optional[str]:
@@ -87,6 +152,14 @@ class Settings(BaseSettings):
     def okx_wallet_accounts(self) -> list[str]:
         try:
             return json.loads(self.okx_wallet_account_ids)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    @property
+    def cors_origins(self) -> list[str]:
+        try:
+            origins = json.loads(self.cors_allow_origins)
+            return [o for o in origins if isinstance(o, str)]
         except (json.JSONDecodeError, TypeError):
             return []
 

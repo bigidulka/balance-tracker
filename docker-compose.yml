@@ -1,6 +1,22 @@
 version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: balance-tracker-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-balance_tracker} -d ${POSTGRES_DB:-balance_tracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -12,6 +28,43 @@ services:
       - ./data:/app/data
     env_file:
       - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
+      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: balance-tracker-worker
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
+      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - ENABLE_INPROCESS_REFRESH_LOOP=${ENABLE_INPROCESS_REFRESH_LOOP:-false}
+      - ENABLE_WORKER=${ENABLE_WORKER:-true}
+      - ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP=${ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP:-false}
+      - ENABLE_INPROCESS_SYNC_WORKER=${ENABLE_INPROCESS_SYNC_WORKER:-true}
+      - SYNC_WORKER_POLL_INTERVAL_SECONDS=${SYNC_WORKER_POLL_INTERVAL_SECONDS:-2.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   bot:
@@ -24,6 +77,11 @@ services:
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - API_URL=http://api:8000
-      - ALLOWED_USERS=${ALLOWED_USERS:-6238100241}
+      - API_TOKEN=${API_TOKEN:-}
+      - API_ORG_ID=${API_ORG_ID:-}
+      - ALLOWED_USERS=${ALLOWED_USERS:-}
       - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
     restart: unless-stopped
+
+volumes:
+  postgres_data:

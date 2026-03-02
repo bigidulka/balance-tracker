@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <scenario.js> [k6 args...]" >&2
+  echo "Example: $0 steady.js --summary-export /scripts/out/steady-control.json" >&2
+  exit 1
+fi
+
+SCENARIO="$1"
+shift || true
+
+if [[ ! -f "${SCRIPT_DIR}/${SCENARIO}" ]]; then
+  echo "Scenario not found: ${SCRIPT_DIR}/${SCENARIO}" >&2
+  exit 1
+fi
+
+mkdir -p "${PROJECT_ROOT}/loadtests/out"
+chmod 777 "${PROJECT_ROOT}/loadtests/out" || true
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is required but not found in PATH" >&2
+  exit 1
+fi
+
+exec docker run --rm \
+  --network host \
+  -v "${SCRIPT_DIR}:/scripts" \
+  -e BASE_URL="${BASE_URL:-http://127.0.0.1:8000}" \
+  -e AUTH_TOKEN="${AUTH_TOKEN:-}" \
+  -e ORGANIZATION_ID="${ORGANIZATION_ID:-1}" \
+  -e ORGANIZATION_COUNT="${ORGANIZATION_COUNT:-1}" \
+  -e ORGANIZATION_IDS="${ORGANIZATION_IDS:-}" \
+  -e ACCOUNTS_PER_ORG="${ACCOUNTS_PER_ORG:-1000}" \
+  -e THINK_TIME_MS="${THINK_TIME_MS:-0}" \
+  -e REQUEST_TIMEOUT_MS="${REQUEST_TIMEOUT_MS:-30000}" \
+  -e FORCE_REFRESH_RATIO="${FORCE_REFRESH_RATIO:-0.03}" \
+  -e ENABLE_MUTATING_ENDPOINTS="${ENABLE_MUTATING_ENDPOINTS:-false}" \
+  -e THRESHOLD_HTTP_REQ_FAILED_STEADY="${THRESHOLD_HTTP_REQ_FAILED_STEADY:-}" \
+  -e THRESHOLD_HTTP_REQ_P95_STEADY="${THRESHOLD_HTTP_REQ_P95_STEADY:-}" \
+  -e THRESHOLD_HTTP_REQ_P99_STEADY="${THRESHOLD_HTTP_REQ_P99_STEADY:-}" \
+  -e THRESHOLD_CHECKS_STEADY="${THRESHOLD_CHECKS_STEADY:-}" \
+  -e THRESHOLD_HTTP_REQ_FAILED_BURST="${THRESHOLD_HTTP_REQ_FAILED_BURST:-}" \
+  -e THRESHOLD_HTTP_REQ_P95_BURST="${THRESHOLD_HTTP_REQ_P95_BURST:-}" \
+  -e THRESHOLD_HTTP_REQ_P99_BURST="${THRESHOLD_HTTP_REQ_P99_BURST:-}" \
+  -e THRESHOLD_CHECKS_BURST="${THRESHOLD_CHECKS_BURST:-}" \
+  -e THRESHOLD_HTTP_REQ_FAILED_DEGRADED="${THRESHOLD_HTTP_REQ_FAILED_DEGRADED:-}" \
+  -e THRESHOLD_HTTP_REQ_P95_DEGRADED="${THRESHOLD_HTTP_REQ_P95_DEGRADED:-}" \
+  -e THRESHOLD_HTTP_REQ_P99_DEGRADED="${THRESHOLD_HTTP_REQ_P99_DEGRADED:-}" \
+  -e THRESHOLD_CHECKS_DEGRADED="${THRESHOLD_CHECKS_DEGRADED:-}" \
+  -e STEADY_RPS="${STEADY_RPS:-25}" \
+  -e STEADY_DURATION="${STEADY_DURATION:-10m}" \
+  -e PRE_ALLOCATED_VUS="${PRE_ALLOCATED_VUS:-40}" \
+  -e MAX_VUS="${MAX_VUS:-250}" \
+  -e BURST_START_RPS="${BURST_START_RPS:-20}" \
+  -e BURST_PEAK_RPS="${BURST_PEAK_RPS:-120}" \
+  -e BURST_PRE_ALLOCATED_VUS="${BURST_PRE_ALLOCATED_VUS:-80}" \
+  -e BURST_MAX_VUS="${BURST_MAX_VUS:-500}" \
+  -e BURST_WARMUP="${BURST_WARMUP:-2m}" \
+  -e BURST_RAMP="${BURST_RAMP:-2m}" \
+  -e BURST_HOLD="${BURST_HOLD:-3m}" \
+  -e BURST_COOLDOWN="${BURST_COOLDOWN:-2m}" \
+  -e DEGRADED_RPS="${DEGRADED_RPS:-15}" \
+  -e DEGRADED_DURATION="${DEGRADED_DURATION:-12m}" \
+  -e DEGRADED_PRE_ALLOCATED_VUS="${DEGRADED_PRE_ALLOCATED_VUS:-40}" \
+  -e DEGRADED_MAX_VUS="${DEGRADED_MAX_VUS:-300}" \
+  grafana/k6:latest run "/scripts/${SCENARIO}" "$@"

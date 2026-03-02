@@ -1,11 +1,28 @@
 import aiohttp
+from datetime import datetime
 from typing import Optional, Dict, Any
-from bot.config import API_URL
+
+from bot.config import settings
 
 
 class APIClient:
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
+
+    def _build_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if settings.api_token:
+            headers["Authorization"] = f"Bearer {settings.api_token}"
+        if settings.api_org_id:
+            headers["X-Organization-Id"] = settings.api_org_id
+            headers["X-Org-Id"] = settings.api_org_id
+        return headers
+
+    def _add_org_param(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        merged = dict(params or {})
+        if settings.api_org_id and "organization_id" not in merged:
+            merged["organization_id"] = settings.api_org_id
+        return merged
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -22,13 +39,31 @@ class APIClient:
         """
         session = await self._get_session()
         endpoint = "/api/v1/balances/cached" if cached else "/api/v1/balances"
-        async with session.get(f"{API_URL}{endpoint}") as resp:
+        async with session.get(
+            f"{settings.api_url}{endpoint}",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_dashboard_summary(self) -> Dict[str, Any]:
+        session = await self._get_session()
+        async with session.get(
+            f"{settings.api_url}/api/v1/dashboard/summary",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
             resp.raise_for_status()
             return await resp.json()
 
     async def get_health(self) -> Dict[str, Any]:
         session = await self._get_session()
-        async with session.get(f"{API_URL}/api/v1/health") as resp:
+        async with session.get(
+            f"{settings.api_url}/api/v1/health",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -37,7 +72,12 @@ class APIClient:
         session = await self._get_session()
         # Longer timeout for full refresh
         timeout = aiohttp.ClientTimeout(total=120)
-        async with session.post(f"{API_URL}/api/v1/refresh", timeout=timeout) as resp:
+        async with session.post(
+            f"{settings.api_url}/api/v1/refresh",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+            timeout=timeout,
+        ) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -46,19 +86,30 @@ class APIClient:
         service: Optional[str] = None,
         tx_type: Optional[str] = None,
         status: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> Dict[str, Any]:
         """Get transactions history"""
         session = await self._get_session()
-        params = {"limit": limit}
+        params = {"limit": limit, "offset": offset}
         if service:
             params["service"] = service
         if tx_type:
             params["tx_type"] = tx_type
         if status:
             params["status"] = status
+        if start_date:
+            params["start_date"] = start_date.isoformat()
+        if end_date:
+            params["end_date"] = end_date.isoformat()
 
-        async with session.get(f"{API_URL}/api/v1/transactions", params=params) as resp:
+        async with session.get(
+            f"{settings.api_url}/api/v1/transactions",
+            headers=self._build_headers(),
+            params=self._add_org_param(params),
+        ) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -83,9 +134,82 @@ class APIClient:
         session = await self._get_session()
         timeout = aiohttp.ClientTimeout(total=120)
         async with session.post(
-            f"{API_URL}/api/v1/transactions/refresh",
-            params={"since_hours": since_hours},
+            f"{settings.api_url}/api/v1/transactions/refresh",
+            headers=self._build_headers(),
+            params=self._add_org_param({"since_hours": since_hours}),
             timeout=timeout,
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_capabilities(self) -> Dict[str, Any]:
+        """Get capabilities/entitlements payload if API provides it."""
+        session = await self._get_session()
+        last_error: Optional[Exception] = None
+
+        for endpoint in (
+            "/api/v1/entitlements",
+            "/api/v1/capabilities",
+            "/api/v1/plans/me",
+        ):
+            try:
+                async with session.get(
+                    f"{settings.api_url}{endpoint}",
+                    headers=self._build_headers(),
+                    params=self._add_org_param(),
+                ) as resp:
+                    if resp.status == 404:
+                        continue
+                    resp.raise_for_status()
+                    payload = await resp.json()
+                    if isinstance(payload, dict):
+                        return payload
+                    return {"raw": payload}
+            except Exception as exc:
+                last_error = exc
+
+        if last_error:
+            raise last_error
+
+        return {}
+
+    async def get_integrations(self, include_inactive: bool = True) -> Dict[str, Any]:
+        session = await self._get_session()
+        params = {"include_inactive": str(include_inactive).lower()}
+        async with session.get(
+            f"{settings.api_url}/api/v1/integrations",
+            headers=self._build_headers(),
+            params=self._add_org_param(params),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def deactivate_integration(self, integration_id: int) -> Dict[str, Any]:
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/integrations/{integration_id}/deactivate",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def activate_integration(self, integration_id: int) -> Dict[str, Any]:
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/integrations/{integration_id}/activate",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def refresh_integration(self, integration_id: int) -> Dict[str, Any]:
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/integrations/{integration_id}/refresh",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
         ) as resp:
             resp.raise_for_status()
             return await resp.json()

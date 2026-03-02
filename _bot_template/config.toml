@@ -1,0 +1,8 @@
+# Bot Template - Настройки
+[bot]
+name = "template_bot"
+admins = []           # Telegram ID администраторов
+
+# Дополнительные настройки
+[settings]
+# Добавьте свои настройки здесь

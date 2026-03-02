@@ -1,0 +1,1 @@
+{"counters":{"ccxt_tickers_cache_miss_total":180,"ccxt_tickers_cache_hit_total":184},"histograms":{"ccxt_call_duration_seconds":{"buckets":{"0.01":56,"0.05":56,"0.1":56,"0.25":100,"0.5":378,"1.0":581,"2.5":768,"5.0":925,"10.0":1032},"+Inf":1048,"count":1048,"sum":2050.9071293748275}}}

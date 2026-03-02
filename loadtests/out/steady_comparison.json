@@ -1,0 +1,33 @@
+{
+  "control": {
+    "iterations": 28,
+    "dropped_iterations": 3,
+    "http_req_failed_rate": 0.25,
+    "checks_rate": 0.75,
+    "http_req_duration_avg_ms": 2740.5448135714287,
+    "http_req_duration_p95_ms": 10001.055126750001,
+    "http_req_duration_p99_ms": 10001.17124714,
+    "refresh_passes": 0,
+    "refresh_fails": 28
+  },
+  "optimized": {
+    "iterations": 29,
+    "dropped_iterations": 1,
+    "http_req_failed_rate": 0.06896551724137931,
+    "checks_rate": 0.9310344827586207,
+    "http_req_duration_avg_ms": 1417.5716531896546,
+    "http_req_duration_p95_ms": 9389.363406749999,
+    "http_req_duration_p99_ms": 10000.385914749999,
+    "refresh_passes": 21,
+    "refresh_fails": 8
+  },
+  "delta": {
+    "iterations_pct": 3.571428571428571,
+    "dropped_iterations_pct": -66.66666666666666,
+    "http_req_failed_rate_pct": -72.41379310344827,
+    "checks_rate_pct": 24.137931034482754,
+    "http_req_duration_avg_ms_pct": -48.27409330547305,
+    "http_req_duration_p95_ms_pct": -6.1162718557954925,
+    "http_req_duration_p99_ms_pct": -0.007852404189422232
+  }
+}

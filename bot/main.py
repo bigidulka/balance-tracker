@@ -1,9 +1,10 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from bot.config import BOT_TOKEN, NOTIFICATION_INTERVAL
+from bot.config import settings
 from bot.handlers import router
 from bot.api_client import api_client
 from bot.notifications import notification_loop, transaction_notification_loop
@@ -21,11 +22,14 @@ _tx_notification_task: asyncio.Task | None = None
 async def main():
     global _notification_task, _tx_notification_task
 
-    if not BOT_TOKEN:
+    if not settings.bot_token:
         logger.error("BOT_TOKEN is not set")
         return
 
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = Dispatcher()
     dp.include_router(router)
 
@@ -33,14 +37,15 @@ async def main():
 
     # Start notification background tasks
     _notification_task = asyncio.create_task(
-        notification_loop(bot, interval=NOTIFICATION_INTERVAL)
+        notification_loop(bot, interval=settings.notification_interval)
     )
     logger.info(
-        f"Balance notification loop started (interval: {NOTIFICATION_INTERVAL}s)"
+        "Balance notification loop started (interval: %ss)",
+        settings.notification_interval,
     )
 
     # Start transaction notification background task (check every 2 minutes)
-    tx_interval = max(NOTIFICATION_INTERVAL, 120)
+    tx_interval = max(settings.notification_interval, 120)
     _tx_notification_task = asyncio.create_task(
         transaction_notification_loop(bot, interval=tx_interval)
     )

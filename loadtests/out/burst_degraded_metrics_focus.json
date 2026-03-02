@@ -1,0 +1,23 @@
+{
+  "control": {
+    "singleflight_leader_total": 0,
+    "singleflight_follower_total": 0,
+    "singleflight_error_total": 0,
+    "tickers_cache_hit_total": 478,
+    "tickers_cache_miss_total": 354,
+    "singleflight_wait_count": 0,
+    "backpressure_wait_count": 0,
+    "ccxt_call_duration_count": 2337
+  },
+  "optimized": {
+    "singleflight_leader_total": 719,
+    "singleflight_follower_total": 698,
+    "singleflight_error_total": 91,
+    "tickers_cache_hit_total": 378,
+    "tickers_cache_miss_total": 143,
+    "singleflight_wait_count": 698,
+    "backpressure_wait_count": 1245,
+    "ccxt_call_duration_count": 1245
+  },
+  "optimized_follower_to_leader_ratio": 0.9707927677329624
+}
