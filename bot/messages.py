@@ -12,50 +12,11 @@ from aiogram.utils.formatting import Bold, CustomEmoji, Text, as_key_value, as_m
 from bot.contracts.exchanges import SUPPORTED_CEX_EXCHANGES
 from bot.emoji_catalog import CHAIN_EMOJI_MAP
 from bot.i18n import t
+from bot.ui_emoji import UI_ICONS as EMOJI_IDS
 
 ACCESS_DENIED = "Access denied"
 ERROR_PREFIX = "Error"
 NOOP = "noop"
-
-
-EMOJI_IDS = {
-    # 📊 stats — dashboard overview
-    "dashboard": "5936143551854285132",
-    # 🎇 loading spinner — animated loading
-    "loading": "5778226250149532337",
-    # 👁 view — list of visible actions
-    "actions": "6037397706505195857",
-    # ℹ info — status / info block
-    "status": "6028435952299413210",
-    # 🔃 refresh — circular refresh arrow
-    "refresh": "6030657343744644592",
-    # 👛 money — spot balance (coin purse)
-    "spot": "5904462880941545555",
-    # 📉 analytics — futures / chart
-    "futures": "5935913431801532272",
-    # 👛 wallet — DEX wallet
-    "dex": "5769126056262898415",
-    # 💳 transfer — transactions / transfers
-    "transactions": "5902206159095339799",
-    # 📦 cube — integrations / connected sources
-    "integrations": "5884479287171485878",
-    # ⚙ settings — preferences gear
-    "settings": "6032742198179532882",
-    # 🏷 tag / label — plan / tariff
-    "plan": "5886285355279193209",
-    # 👛 wallet — generic wallet key
-    "wallet": "5769126056262898415",
-    # 🕓 history — time / history clock
-    "time": "5775896410780079073",
-    # ✅ done — success / ok
-    "ok": "5774022692642492953",
-    # ❗ warning — blocked / gated warn
-    "warn": "6030563507299160824",
-    # ❌ close / error
-    "error": "6030757850274336631",
-    # 🔡 add text — input / text entry
-    "input": "5771851822897566479",
-}
 
 
 def _emoji(symbol: str, key: str) -> CustomEmoji:
