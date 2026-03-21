@@ -44,33 +44,7 @@ from bot.contracts.callbacks import (
 from bot.contracts.exchange_emojis import resolve_exchange_emoji_id
 from bot.contracts.exchanges import SUPPORTED_CEX_EXCHANGES
 from bot.i18n import locale_label, t
-
-
-_ICON_IDS = {
-    "spot": "5345824065368128623",
-    "futures": "5346334548001058226",
-    "dex": "5258204546391351475",
-    "transactions": "6041730074376410123",
-    "integrations": "5778672437122045013",
-    "settings": "5258096772776991776",
-    "refresh": "5258420634785947640",
-    "plan": "5886285355279193209",
-    "back": "5960671702059848143",
-    "left": "5258236805890710909",
-    "right": "5260450573768990626",
-    "noop": "5346334548001058226",
-    "filter": "5260348422266822411",
-    "reset": "5260687119092817530",
-    "toggle": "5258096772776991776",
-    "enable": "5774022692642492953",
-    "disable": "5774077015388852135",
-    "delete": "5774077015388852135",
-    "input": "5346133470517163362",
-    "wallet": "5258204546391351475",
-    "admin": "5258096772776991776",
-    "add": "5274008024585871702",
-    "home": "5257963315258204021",
-}
+from bot.ui_emoji import UI_ICONS as _ICON_IDS
 
 
 def _payload(**kwargs: object) -> str:
