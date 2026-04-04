@@ -17,18 +17,21 @@ class CCXTIntegrationProvider(IntegrationProvider):
         payload = payload or {}
         exchange_id = (
             payload.get("exchange_id")
+            or integration.exchange_code
             or integration.external_id
             or integration.name
             or integration.provider
         )
 
         balance = await ccxt_manager.fetch_balance(exchange_id)
+        payload_balance = balance.model_dump(mode="json")
+        payload_balance["integration_id"] = integration.id
         return ProviderRefreshResult(
             status="ok",
             data={
                 "organization_id": organization_id,
                 "integration_id": integration.id,
                 "exchange_id": exchange_id,
-                "balance": balance.model_dump(),
+                "balance": payload_balance,
             },
         )

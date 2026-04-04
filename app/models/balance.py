@@ -1,5 +1,6 @@
 from sqlalchemy import (
     Column,
+    BigInteger,
     Integer,
     String,
     Float,
@@ -35,8 +36,40 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=True)
+    telegram_user_id = Column(BigInteger, nullable=True, unique=True, index=True)
+    telegram_username = Column(String(255), nullable=True, index=True)
+    telegram_full_name = Column(String(255), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TelegramIdentity(Base):
+    __tablename__ = "telegram_identities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id = Column(BigInteger, nullable=False, unique=True, index=True)
+    telegram_username = Column(String(255), nullable=True)
+    telegram_first_name = Column(String(255), nullable=True)
+    telegram_last_name = Column(String(255), nullable=True)
+    telegram_full_name = Column(String(255), nullable=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class OrganizationMembership(Base):
@@ -66,6 +99,12 @@ class Balance(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, nullable=False, default=DEFAULT_ORGANIZATION_ID, index=True)
+    integration_id = Column(
+        Integer,
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     service = Column(String(50), nullable=False, index=True)
     assets = Column(JSON, nullable=False, default=list)  # Deprecated: for compatibility
     accounts = Column(
@@ -79,6 +118,7 @@ class Balance(Base):
 
     __table_args__ = (
         Index("ix_balances_org_service_updated", "organization_id", "service", "updated_at"),
+        Index("ix_balances_org_integration_updated", "organization_id", "integration_id", "updated_at"),
     )
 
 
@@ -87,12 +127,19 @@ class BalanceHistory(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, nullable=False, default=DEFAULT_ORGANIZATION_ID, index=True)
+    integration_id = Column(
+        Integer,
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     service = Column(String(50), nullable=False, index=True)
     assets = Column(JSON, nullable=False, default=list)  # Deprecated
     accounts = Column(
         JSON, nullable=False, default=list
     )  # List of {account_type, assets, total_usd}
     total_usd = Column(Float, nullable=False, default=0.0)
+    actual = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -100,6 +147,12 @@ class BalanceHistory(Base):
             "ix_balance_history_org_service_created",
             "organization_id",
             "service",
+            "created_at",
+        ),
+        Index(
+            "ix_balance_history_org_integration_created",
+            "organization_id",
+            "integration_id",
             "created_at",
         ),
         Index("ix_balance_history_org_created", "organization_id", "created_at"),
@@ -133,6 +186,12 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, nullable=False, default=DEFAULT_ORGANIZATION_ID, index=True)
+    integration_id = Column(
+        Integer,
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Уникальный идентификатор транзакции на бирже
     tx_id = Column(String(255), nullable=False, index=True)
@@ -185,9 +244,22 @@ class Transaction(Base):
     __table_args__ = (
         Index("ix_transactions_org_service_type", "organization_id", "service", "tx_type"),
         Index(
+            "ix_transactions_org_integration_type",
+            "organization_id",
+            "integration_id",
+            "tx_type",
+        ),
+        Index(
             "ix_transactions_org_service_tx_id",
             "organization_id",
             "service",
+            "tx_id",
+            unique=False,
+        ),
+        Index(
+            "ix_transactions_org_integration_tx_id",
+            "organization_id",
+            "integration_id",
             "tx_id",
             unique=True,
         ),
@@ -457,6 +529,144 @@ class BillingWebhookEvent(Base):
 
     __table_args__ = (
         UniqueConstraint("provider", "external_event_id", name="uq_billing_event_provider_external_id"),
+    )
+
+
+class PaymentInvoice(Base):
+    __tablename__ = "payment_invoices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_by_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    provider = Column(String(50), nullable=False, default="cryptobot", index=True)
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    invoice_type = Column(String(30), nullable=False, default="balance_topup")
+    currency = Column(String(10), nullable=False, default="USD")
+    amount = Column(Float, nullable=False, default=0.0)
+    asset = Column(String(20), nullable=True)
+    external_invoice_id = Column(String(255), nullable=True, index=True)
+    external_payload = Column(String(255), nullable=True, index=True)
+    pay_url = Column(Text, nullable=True)
+    bot_invoice_url = Column(Text, nullable=True)
+    description = Column(String(255), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    paid_amount = Column(Float, nullable=True)
+    paid_asset = Column(String(20), nullable=True)
+    paid_usd_amount = Column(Float, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_payment_invoices_org_status", "organization_id", "status"),
+        UniqueConstraint(
+            "provider",
+            "external_invoice_id",
+            name="uq_payment_invoice_provider_external_id",
+        ),
+    )
+
+
+class LedgerEntry(Base):
+    __tablename__ = "ledger_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_by_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    entry_type = Column(String(20), nullable=False, index=True)
+    amount = Column(Float, nullable=False, default=0.0)
+    currency = Column(String(10), nullable=False, default="USD")
+    source_type = Column(String(50), nullable=False, index=True)
+    source_id = Column(String(255), nullable=True, index=True)
+    note = Column(String(255), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_ledger_entries_org_created", "organization_id", "created_at"),
+        Index("ix_ledger_entries_org_source", "organization_id", "source_type", "source_id"),
+    )
+
+
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(64), nullable=False, unique=True, index=True)
+    reward_type = Column(String(30), nullable=False, index=True)
+    reward_value = Column(Float, nullable=False, default=0.0)
+    reward_currency = Column(String(10), nullable=False, default="USD")
+    plan_code = Column(String(50), nullable=True)
+    duration_days = Column(Integer, nullable=True)
+    max_redemptions = Column(Integer, nullable=True)
+    per_org_limit = Column(Integer, nullable=False, default=1)
+    redeemed_count = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PromoRedemption(Base):
+    __tablename__ = "promo_redemptions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    promo_code_id = Column(
+        Integer,
+        ForeignKey("promo_codes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status = Column(String(30), nullable=False, default="applied", index=True)
+    reward_snapshot = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_promo_redemptions_org_created", "organization_id", "created_at"),
+        UniqueConstraint(
+            "promo_code_id",
+            "organization_id",
+            "status",
+            name="uq_promo_redemptions_code_org_status",
+        ),
     )
 
 

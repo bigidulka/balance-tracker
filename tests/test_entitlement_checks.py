@@ -24,44 +24,105 @@ import app.services.sync_job_service as sync_job_service_module
 
 
 class PolicyResolutionTests(unittest.TestCase):
-    def test_json_policy_resolution_for_free_and_full_plans(self):
+    def test_json_policy_resolution_for_free_and_pro_plans(self):
         free = Plan(
             code="free",
             name="Free",
-            max_integrations=3,
-            min_refresh_interval_seconds=300,
+            max_integrations=6,
+            min_refresh_interval_seconds=600,
             policy_json={
-                "limits": {"max_integrations": 3, "max_accounts_per_exchange": 1},
-                "throttling": {"min_refresh_interval_seconds": 300},
-                "capabilities": {"allow_dex": 0},
+                "version": 1,
+                "features": {"allow_dex": True},
+                "limits": {
+                    "max_integrations": 6,
+                    "max_accounts_per_exchange": 0,
+                    "max_cex_accounts": 5,
+                    "max_evm_wallets": 1,
+                    "min_refresh_interval_seconds": 600,
+                },
+                "background": {
+                    "enabled": True,
+                    "refresh_interval_seconds": 600,
+                },
+                "throttling": {
+                    "min_refresh_interval_seconds": 600,
+                    "background_refresh_interval_seconds": 600,
+                },
             },
             is_active=True,
         )
-        full = Plan(
-            code="full",
-            name="Full",
-            max_integrations=20,
+        pro = Plan(
+            code="pro",
+            name="Pro",
+            max_integrations=71,
             min_refresh_interval_seconds=60,
             policy_json={
-                "limits": {"max_integrations": 100, "max_accounts_per_exchange": 10},
-                "throttling": {"min_refresh_interval_seconds": 30},
-                "capabilities": {"allow_dex": 1},
+                "version": 2,
+                "features": {"allow_dex": True},
+                "limits": {
+                    "max_integrations": 71,
+                    "max_accounts_per_exchange": 0,
+                    "max_cex_accounts": 56,
+                    "max_evm_wallets": 15,
+                    "min_refresh_interval_seconds": 60,
+                },
+                "background": {
+                    "enabled": True,
+                    "refresh_interval_seconds": 60,
+                },
+                "throttling": {
+                    "min_refresh_interval_seconds": 60,
+                    "background_refresh_interval_seconds": 60,
+                },
             },
             is_active=True,
         )
 
         free_policy = EntitlementsService._resolve_policy(free)
-        full_policy = EntitlementsService._resolve_policy(full)
+        pro_policy = EntitlementsService._resolve_policy(pro)
 
-        self.assertEqual(free_policy["limits"]["max_integrations"], 3)
-        self.assertEqual(free_policy["limits"]["max_accounts_per_exchange"], 1)
-        self.assertEqual(free_policy["throttling"]["min_refresh_interval_seconds"], 300)
-        self.assertEqual(free_policy["capabilities"]["allow_dex"], 0)
+        self.assertEqual(free_policy["version"], 1)
+        self.assertEqual(free_policy["features"]["allow_dex"], True)
+        self.assertEqual(free_policy["limits"]["max_integrations"], 6)
+        self.assertEqual(free_policy["limits"]["max_cex_accounts"], 5)
+        self.assertEqual(free_policy["limits"]["max_evm_wallets"], 1)
+        self.assertEqual(free_policy["limits"]["max_accounts_per_exchange"], 0)
+        self.assertEqual(free_policy["background"]["refresh_interval_seconds"], 600)
+        self.assertEqual(free_policy["throttling"]["background_refresh_interval_seconds"], 600)
 
-        self.assertEqual(full_policy["limits"]["max_integrations"], 100)
-        self.assertEqual(full_policy["limits"]["max_accounts_per_exchange"], 10)
-        self.assertEqual(full_policy["throttling"]["min_refresh_interval_seconds"], 30)
-        self.assertEqual(full_policy["capabilities"]["allow_dex"], 1)
+        self.assertEqual(pro_policy["version"], 2)
+        self.assertEqual(pro_policy["features"]["allow_dex"], True)
+        self.assertEqual(pro_policy["limits"]["max_integrations"], 71)
+        self.assertEqual(pro_policy["limits"]["max_cex_accounts"], 56)
+        self.assertEqual(pro_policy["limits"]["max_evm_wallets"], 15)
+        self.assertEqual(pro_policy["limits"]["max_accounts_per_exchange"], 0)
+        self.assertEqual(pro_policy["background"]["refresh_interval_seconds"], 60)
+        self.assertEqual(pro_policy["throttling"]["background_refresh_interval_seconds"], 60)
+
+    def test_legacy_policy_resolution_remains_supported(self):
+        plan = Plan(
+            code="legacy",
+            name="Legacy",
+            max_integrations=7,
+            min_refresh_interval_seconds=120,
+            policy_json={
+                "limits": {"max_accounts_per_exchange": 4},
+                "throttling": {"min_refresh_interval_seconds": 90},
+                "capabilities": {"allow_dex": 1},
+            },
+            is_active=True,
+        )
+
+        policy = EntitlementsService._resolve_policy(plan)
+
+        self.assertEqual(policy["version"], 1)
+        self.assertEqual(policy["features"]["allow_dex"], True)
+        self.assertEqual(policy["limits"]["max_integrations"], 7)
+        self.assertEqual(policy["limits"]["max_cex_accounts"], 7)
+        self.assertEqual(policy["limits"]["max_evm_wallets"], 0)
+        self.assertEqual(policy["limits"]["max_accounts_per_exchange"], 4)
+        self.assertEqual(policy["background"]["refresh_interval_seconds"], 90)
+        self.assertEqual(policy["throttling"]["background_refresh_interval_seconds"], 90)
 
 
 class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
@@ -83,12 +144,26 @@ class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
             plan = Plan(
                 code="free",
                 name="Free",
-                max_integrations=3,
-                min_refresh_interval_seconds=300,
+                max_integrations=6,
+                min_refresh_interval_seconds=600,
                 policy_json={
-                    "limits": {"max_integrations": 3, "max_accounts_per_exchange": 1},
-                    "throttling": {"min_refresh_interval_seconds": 300},
-                    "capabilities": {"allow_dex": 0},
+                    "version": 1,
+                    "features": {"allow_dex": True},
+                    "limits": {
+                        "max_integrations": 6,
+                        "max_accounts_per_exchange": 0,
+                        "max_cex_accounts": 5,
+                        "max_evm_wallets": 1,
+                        "min_refresh_interval_seconds": 600,
+                    },
+                    "background": {
+                        "enabled": True,
+                        "refresh_interval_seconds": 600,
+                    },
+                    "throttling": {
+                        "min_refresh_interval_seconds": 600,
+                        "background_refresh_interval_seconds": 600,
+                    },
                 },
                 is_active=True,
             )
@@ -104,31 +179,22 @@ class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
             return org.id
 
-    async def test_free_plan_denies_dex_integration_creation(self):
+    async def test_free_plan_limits_cex_accounts(self):
         org_id = await self._seed_free_org_with_plan()
 
         async with self.session_maker() as session:
-            service = EntitlementsService(session)
-            with self.assertRaises(HTTPException) as exc:
-                await service.ensure_can_create_integration(org_id, kind="dex")
-
-            self.assertEqual(exc.exception.status_code, 403)
-            self.assertEqual(exc.exception.detail["code"], "dex_not_allowed")
-
-    async def test_free_plan_limits_to_one_cex_account_per_exchange(self):
-        org_id = await self._seed_free_org_with_plan()
-
-        async with self.session_maker() as session:
-            existing = Integration(
-                organization_id=org_id,
-                provider="binance",
-                name="Binance Main",
-                kind="cex",
-                exchange_code="binance",
-                account_ref="main",
-                is_active=True,
-            )
-            session.add(existing)
+            for index in range(5):
+                session.add(
+                    Integration(
+                        organization_id=org_id,
+                        provider="binance",
+                        name=f"Binance {index}",
+                        kind="cex",
+                        exchange_code="binance" if index < 3 else "bybit",
+                        account_ref=f"acc-{index}",
+                        is_active=True,
+                    )
+                )
             await session.commit()
 
             service = EntitlementsService(session)
@@ -136,12 +202,162 @@ class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
                 await service.ensure_can_create_integration(
                     org_id,
                     kind="cex",
-                    exchange_code="binance",
+                    exchange_code="okx",
                 )
 
             self.assertEqual(exc.exception.status_code, 403)
-            self.assertEqual(exc.exception.detail["code"], "exchange_account_limit_reached")
-            self.assertEqual(exc.exception.detail["policy"]["max_accounts_per_exchange"], 1)
+            self.assertEqual(exc.exception.detail["code"], "cex_account_limit_reached")
+            self.assertEqual(exc.exception.detail["policy"]["max_cex_accounts"], 5)
+
+    async def test_free_plan_limits_evm_wallets_but_not_non_evm_wallets(self):
+        org_id = await self._seed_free_org_with_plan()
+
+        async with self.session_maker() as session:
+            session.add(
+                Integration(
+                    organization_id=org_id,
+                    provider="debank",
+                    name="EVM Wallet",
+                    kind="dex",
+                    wallet_address="0x111",
+                    chain="ethereum",
+                    is_active=True,
+                )
+            )
+            await session.commit()
+
+            service = EntitlementsService(session)
+            with self.assertRaises(HTTPException) as exc:
+                await service.ensure_can_create_integration(
+                    org_id,
+                    kind="dex",
+                    chain="base",
+                )
+
+            self.assertEqual(exc.exception.status_code, 403)
+            self.assertEqual(exc.exception.detail["code"], "evm_wallet_limit_reached")
+            self.assertEqual(exc.exception.detail["policy"]["max_evm_wallets"], 1)
+
+            await service.ensure_can_create_integration(
+                org_id,
+                kind="dex",
+                chain="solana",
+            )
+
+
+class EffectiveEntitlementsDatetimeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.session_maker = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    async def test_get_effective_entitlements_handles_naive_last_refresh(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Org Three", slug="org-three")
+            session.add(org)
+            await session.flush()
+
+            plan = Plan(
+                code="free",
+                name="Free",
+                max_integrations=6,
+                min_refresh_interval_seconds=600,
+                policy_json={
+                    "version": 1,
+                    "features": {"allow_dex": True},
+                    "limits": {
+                        "max_integrations": 6,
+                        "max_accounts_per_exchange": 0,
+                        "max_cex_accounts": 5,
+                        "max_evm_wallets": 1,
+                        "min_refresh_interval_seconds": 600,
+                    },
+                    "background": {
+                        "enabled": True,
+                        "refresh_interval_seconds": 600,
+                    },
+                    "throttling": {
+                        "min_refresh_interval_seconds": 600,
+                        "background_refresh_interval_seconds": 600,
+                    },
+                },
+                is_active=True,
+            )
+            session.add(plan)
+            await session.flush()
+
+            session.add(Subscription(organization_id=org.id, plan_id=plan.id, status="active"))
+            session.add(
+                Integration(
+                    organization_id=org.id,
+                    provider="binance",
+                    name="Binance CEX",
+                    kind="cex",
+                    exchange_code="binance",
+                    account_ref="main",
+                    is_active=True,
+                )
+            )
+            session.add(
+                Integration(
+                    organization_id=org.id,
+                    provider="debank",
+                    name="EVM Wallet",
+                    kind="dex",
+                    wallet_address="0xabc",
+                    chain="ethereum",
+                    is_active=True,
+                )
+            )
+            session.add(
+                Integration(
+                    organization_id=org.id,
+                    provider="okx_wallet",
+                    name="Solana Wallet",
+                    kind="dex",
+                    wallet_address="So11111111111111111111111111111111111111112",
+                    chain="solana",
+                    is_active=True,
+                )
+            )
+            session.add(
+                SyncJob(
+                    organization_id=org.id,
+                    job_type="refresh",
+                    status="success",
+                    payload={},
+                    result={},
+                    finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+            await session.commit()
+
+            payload = await EntitlementsService(session).get_effective_entitlements(org.id)
+            self.assertIn("last_refresh_at", payload)
+            self.assertIn("policy", payload)
+            self.assertEqual(payload["policy"]["version"], 1)
+            self.assertIn("state", payload["policy"])
+            self.assertIn("refresh", payload["policy"]["state"])
+            self.assertIn("cex", payload["policy"]["state"])
+            self.assertIn("evm", payload["policy"]["state"])
+            self.assertIn("throttling", payload)
+            self.assertIn("background", payload)
+            self.assertIn("usage", payload)
+            self.assertEqual(payload["throttling"]["min_refresh_interval_seconds"], 600)
+            self.assertEqual(payload["throttling"]["background_refresh_interval_seconds"], 600)
+            self.assertEqual(payload["background"]["refresh_interval_seconds"], 600)
+            self.assertEqual(payload["usage"]["cex"]["active"], 1)
+            self.assertEqual(payload["usage"]["evm"]["active"], 1)
+            self.assertEqual(payload["usage"]["non_evm_dex"]["active"], 1)
+            self.assertEqual(payload["limits"]["max_cex_accounts"], 5)
+            self.assertEqual(payload["limits"]["max_evm_wallets"], 1)
+            self.assertIsInstance(payload["capabilities"], dict)
+            self.assertTrue(payload["capabilities"]["refresh"] in {True, False})
+            self.assertIsInstance(payload["policy"]["state"]["integrations"], dict)
 
 
 class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
@@ -190,7 +406,7 @@ class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
                     detail={
                         "code": "refresh_rate_limited",
                         "message": "Refresh rate limit exceeded for current plan",
-                        "min_refresh_interval_seconds": 300,
+                        "min_refresh_interval_seconds": 600,
                         "retry_after_seconds": 42,
                     },
                     headers={"Retry-After": "42"},
@@ -203,7 +419,7 @@ class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated_job.result["status"], "rate_limited")
             self.assertEqual(updated_job.result["code"], "refresh_rate_limited")
             self.assertEqual(updated_job.result["retry_after_seconds"], 42)
-            self.assertEqual(updated_job.result["min_refresh_interval_seconds"], 300)
+            self.assertEqual(updated_job.result["min_refresh_interval_seconds"], 600)
 
 
 class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
@@ -233,9 +449,13 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
                 patch(
                     "app.services.balance_service.settings",
                     new=SimpleNamespace(
-                        get_active_exchanges=lambda: ["binance"],
-                        okx_wallet_accounts=[],
+                        exchange_parallelism=1,
                     ),
+                ),
+                patch.object(
+                    BalanceService,
+                    "load_balance_targets",
+                    new=AsyncMock(return_value=(["binance"], [], {"binance"})),
                 ),
                 patch.object(
                     service.entitlements,
@@ -289,9 +509,13 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
                 patch(
                     "app.services.balance_service.settings",
                     new=SimpleNamespace(
-                        get_active_exchanges=lambda: ["binance", "okx"],
-                        okx_wallet_accounts=[],
+                        exchange_parallelism=1,
                     ),
+                ),
+                patch.object(
+                    BalanceService,
+                    "load_balance_targets",
+                    new=AsyncMock(return_value=(["binance", "okx"], [], {"binance", "okx"})),
                 ),
                 patch(
                     "app.services.balance_service.ccxt_manager.fetch_all_balances",
@@ -522,6 +746,71 @@ class IntegrationLifecycleServiceTests(unittest.IsolatedAsyncioTestCase):
             _, job_id, job_status = await service.queue_integration_refresh(org.id, integration.id)
             self.assertGreater(job_id, 0)
             self.assertIn(job_status, {"queued", "running"})
+
+    async def test_activate_respects_plan_limits(self):
+        org_id = await EntitlementEnforcementTests._seed_free_org_with_plan(self)
+
+        async with self.session_maker() as session:
+            for index in range(5):
+                session.add(
+                    Integration(
+                        organization_id=org_id,
+                        provider="ccxt",
+                        name=f"CEX {index}",
+                        kind="cex",
+                        exchange_code="binance" if index < 4 else "bybit",
+                        account_ref=f"acc-{index}",
+                        is_active=True,
+                        status="active",
+                    )
+                )
+            extra = Integration(
+                organization_id=org_id,
+                provider="ccxt",
+                name="Extra OKX",
+                kind="cex",
+                exchange_code="okx",
+                account_ref="extra",
+                is_active=False,
+                status="inactive",
+            )
+            session.add(extra)
+            await session.commit()
+            await session.refresh(extra)
+
+            service = IntegrationService(session)
+            with self.assertRaises(HTTPException) as exc:
+                await service.activate_integration(org_id, extra.id)
+
+            self.assertEqual(exc.exception.status_code, 403)
+            self.assertEqual(exc.exception.detail["code"], "cex_account_limit_reached")
+
+    async def test_delete_integration_removes_record(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Delete Org", slug="delete-org")
+            session.add(org)
+            await session.flush()
+
+            integration = Integration(
+                organization_id=org.id,
+                provider="okx_wallet",
+                name="Wallet",
+                kind="dex",
+                wallet_address="0xf9095877f93603d0b6c44e5a82db5dc751b34cd8",
+                chain="ethereum",
+                is_active=True,
+                status="active",
+            )
+            session.add(integration)
+            await session.commit()
+            await session.refresh(integration)
+
+            service = IntegrationService(session)
+            await service.delete_integration(org.id, integration.id)
+
+            with self.assertRaises(HTTPException) as exc:
+                await service.get_integration(org.id, integration.id)
+            self.assertEqual(exc.exception.status_code, 404)
 
     async def test_get_integration_enforces_tenant_scope(self):
         async with self.session_maker() as session:

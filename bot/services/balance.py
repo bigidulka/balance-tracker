@@ -7,7 +7,7 @@ from typing import Any
 from bot.api_client import api_client
 from bot.config import settings
 
-_balance_cache: dict[str, Any] = {}
+_balance_cache: dict[str, dict[str, Any]] = {}
 
 
 def filter_assets(assets: list[dict[str, Any]], hide_small: bool) -> list[dict[str, Any]]:
@@ -22,12 +22,13 @@ def filter_assets(assets: list[dict[str, Any]], hide_small: bool) -> list[dict[s
 
 async def get_balance_data(force_update_cache: bool = False) -> dict[str, Any]:
     global _balance_cache
+    cache_key = api_client.current_identity_cache_key()
     try:
-        _balance_cache = await api_client.get_balances(cached=True)
+        _balance_cache[cache_key] = await api_client.get_balances(cached=True)
     except Exception:
-        if force_update_cache or not _balance_cache:
+        if force_update_cache or cache_key not in _balance_cache:
             raise
-    return _balance_cache
+    return _balance_cache.get(cache_key, {})
 
 
 def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
@@ -44,6 +45,8 @@ def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
 
     for svc in services:
         name = svc.get("service", "")
+        integration_id = svc.get("integration_id")
+        key = f"{name}#{integration_id}" if integration_id is not None else name
         accounts = svc.get("accounts", [])
         service_assets = svc.get("assets", [])
         service_total = svc.get("total_usd", 0)
@@ -53,10 +56,12 @@ def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
                 for acc in accounts:
                     if acc.get("account_type") == "spot":
                         dex_total += acc.get("total_usd", 0)
-                        dex_wallets[name] = acc
+                        dex_wallets[key] = {**acc, "service": name, "integration_id": integration_id}
             else:
                 dex_total += service_total
-                dex_wallets[name] = {
+                dex_wallets[key] = {
+                    "service": name,
+                    "integration_id": integration_id,
                     "account_type": "spot",
                     "assets": service_assets,
                     "total_usd": service_total,
@@ -71,15 +76,17 @@ def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
                 if acc_type == "spot":
                     spot_total += acc.get("total_usd", 0)
                     if acc.get("total_usd", 0) > 0 or acc.get("assets"):
-                        spot_exchanges[name] = acc
+                        spot_exchanges[key] = {**acc, "service": name, "integration_id": integration_id}
                 elif acc_type == "futures":
                     futures_total += acc.get("total_usd", 0)
                     if acc.get("total_usd", 0) > 0 or acc.get("assets"):
-                        futures_exchanges[name] = acc
+                        futures_exchanges[key] = {**acc, "service": name, "integration_id": integration_id}
         else:
             spot_total += service_total
             if service_total > 0 or service_assets:
-                spot_exchanges[name] = {
+                spot_exchanges[key] = {
+                    "service": name,
+                    "integration_id": integration_id,
                     "account_type": "spot",
                     "assets": service_assets,
                     "total_usd": service_total,

@@ -9,8 +9,12 @@ from app.schemas.integration import (
     IntegrationCreateRequest,
     IntegrationRefreshResponse,
     IntegrationResponse,
+    IntegrationUpdateRequest,
+    IntegrationVerifyRequest,
+    IntegrationVerifyResponse,
 )
 from app.services.audit_log_service import AuditLogService
+from app.services.ccxt_manager import ccxt_manager
 from app.services.integration_service import IntegrationService
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.metrics_service import metrics_service
@@ -31,6 +35,7 @@ def _to_response(integration) -> IntegrationResponse:
         chain=integration.chain,
         is_active=integration.is_active,
         created_at=integration.created_at,
+        updated_at=integration.updated_at,
     )
 
 
@@ -48,7 +53,25 @@ async def list_integrations(
     return [_to_response(integration) for integration in integrations]
 
 
-@router.post("", response_model=IntegrationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/verify", response_model=IntegrationVerifyResponse)
+async def verify_integration_credentials(
+    payload: IntegrationVerifyRequest,
+    identity: IdentityContext = Depends(require_role("member")),
+):
+    exchange_code = payload.exchange_code.strip().lower()
+    ok, error = await ccxt_manager.verify_credentials(
+        exchange_id=exchange_code,
+        api_key=payload.api_key,
+        api_secret=payload.api_secret,
+        api_password=payload.api_password,
+        api_uid=payload.api_uid,
+    )
+    return IntegrationVerifyResponse(ok=ok, error=error)
+
+
+@router.post(
+    "", response_model=IntegrationResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_integration(
     payload: IntegrationCreateRequest,
     db: AsyncSession = Depends(get_db),
@@ -65,6 +88,10 @@ async def create_integration(
         wallet_address=payload.wallet_address,
         chain=payload.chain,
         user_id=identity.user.id,
+        api_key=payload.api_key,
+        api_secret=payload.api_secret,
+        api_password=payload.api_password,
+        api_uid=payload.api_uid,
     )
 
     request_id = f"integration-{integration.id}"
@@ -205,4 +232,51 @@ async def refresh_integration(
         integration_id=integration.id,
         job_id=job_id,
         job_status=job_status,
+    )
+
+
+@router.patch("/{integration_id}", response_model=IntegrationResponse)
+async def update_integration(
+    integration_id: int,
+    payload: IntegrationUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    identity: IdentityContext = Depends(require_role("member")),
+):
+    service = IntegrationService(db)
+    integration = await service.update_integration(
+        organization_id=identity.organization.id,
+        integration_id=integration_id,
+        name=payload.name,
+    )
+
+    request_id = f"integration-{integration.id}-rename"
+    await AuditLogService(db).log_event(
+        organization_id=identity.organization.id,
+        user_id=identity.user.id,
+        request_id=request_id,
+        action="integration.renamed",
+        resource_type="integration",
+        resource_id=str(integration.id),
+        details={"integration_id": integration.id, "name": integration.name},
+    )
+
+    log = get_request_logger(
+        logger,
+        request_log_context(request_id, identity.organization.id, identity.user.id),
+    )
+    log.info("integration_renamed", extra={"integration_id": integration.id})
+
+    return _to_response(integration)
+
+
+@router.delete("/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_integration(
+    integration_id: int,
+    db: AsyncSession = Depends(get_db),
+    identity: IdentityContext = Depends(require_role("member")),
+):
+    service = IntegrationService(db)
+    await service.delete_integration(
+        organization_id=identity.organization.id,
+        integration_id=integration_id,
     )

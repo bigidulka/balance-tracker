@@ -1,16 +1,21 @@
 from fastapi import HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.balance import Integration
+from app.models.balance import Integration, IntegrationSecret
 from app.services.entitlements_service import EntitlementsService
 from app.services.refresh_orchestrator import RefreshOrchestrator
+from app.services.okx_wallet import okx_wallet_service
 
 
 class IntegrationService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.entitlements = EntitlementsService(session)
+
+    @staticmethod
+    def _wallet_service_name(wallet_address: str) -> str:
+        return okx_wallet_service.service_name_for(wallet_address)
 
     async def create_integration(
         self,
@@ -23,6 +28,10 @@ class IntegrationService:
         wallet_address: str | None,
         chain: str | None,
         user_id: int | None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        api_password: str | None = None,
+        api_uid: str | None = None,
     ) -> Integration:
         normalized_kind = kind.lower()
         normalized_exchange_code = exchange_code.lower() if exchange_code else None
@@ -32,6 +41,7 @@ class IntegrationService:
             organization_id,
             kind=normalized_kind,
             exchange_code=normalized_exchange_code,
+            chain=normalized_chain,
         )
 
         duplicate_query = select(Integration).where(
@@ -76,20 +86,61 @@ class IntegrationService:
             created_by_user_id=user_id,
         )
         self.session.add(integration)
+        await self.session.flush()
+
+        secret_pairs = {
+            "api_key": api_key,
+            "api_secret": api_secret,
+            "api_password": api_password,
+            "api_uid": api_uid,
+        }
+        for key_name, secret_value in secret_pairs.items():
+            value = str(secret_value or "").strip()
+            if not value:
+                continue
+            self.session.add(
+                IntegrationSecret(
+                    integration_id=integration.id,
+                    key_name=key_name,
+                    secret_value=value,
+                    is_encrypted=False,
+                )
+            )
+
         await self.session.commit()
         await self.session.refresh(integration)
         return integration
+
+    async def get_integration_secrets(
+        self,
+        organization_id: int,
+        integration_id: int,
+    ) -> dict[str, str]:
+        await self.get_integration(organization_id, integration_id)
+        result = await self.session.execute(
+            select(IntegrationSecret).where(
+                IntegrationSecret.integration_id == integration_id
+            )
+        )
+        return {
+            str(secret.key_name): str(secret.secret_value)
+            for secret in result.scalars().all()
+        }
 
     async def list_integrations(
         self,
         organization_id: int,
         include_inactive: bool = False,
     ) -> list[Integration]:
-        query = select(Integration).where(Integration.organization_id == organization_id)
+        query = select(Integration).where(
+            Integration.organization_id == organization_id
+        )
         if not include_inactive:
             query = query.where(Integration.is_active == True)
 
-        result = await self.session.execute(query.order_by(Integration.created_at.desc()))
+        result = await self.session.execute(
+            query.order_by(Integration.created_at.desc())
+        )
         return list(result.scalars().all())
 
     async def get_integration(
@@ -116,6 +167,27 @@ class IntegrationService:
             )
         return integration
 
+    async def update_integration(
+        self,
+        organization_id: int,
+        integration_id: int,
+        name: str,
+    ) -> Integration:
+        name = name.strip()
+        if not name:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_name",
+                    "message": "Integration name must not be empty",
+                },
+            )
+        integration = await self.get_integration(organization_id, integration_id)
+        integration.name = name
+        await self.session.commit()
+        await self.session.refresh(integration)
+        return integration
+
     async def deactivate_integration(
         self,
         organization_id: int,
@@ -128,12 +200,33 @@ class IntegrationService:
         await self.session.refresh(integration)
         return integration
 
+    async def delete_integration(
+        self,
+        organization_id: int,
+        integration_id: int,
+    ) -> None:
+        integration = await self.get_integration(organization_id, integration_id)
+        await self.session.execute(
+            delete(IntegrationSecret).where(
+                IntegrationSecret.integration_id == integration.id
+            )
+        )
+        await self.session.delete(integration)
+        await self.session.commit()
+
     async def activate_integration(
         self,
         organization_id: int,
         integration_id: int,
     ) -> Integration:
         integration = await self.get_integration(organization_id, integration_id)
+        if not integration.is_active:
+            await self.entitlements.ensure_can_create_integration(
+                organization_id,
+                kind=integration.kind,
+                exchange_code=integration.exchange_code,
+                chain=integration.chain,
+            )
         integration.is_active = True
         integration.status = "active"
         await self.session.commit()

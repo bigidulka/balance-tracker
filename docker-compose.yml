@@ -1,20 +1,28 @@
-version: "3.9"
-
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: balance-tracker-postgres
+  redis:
+    image: redis:7-alpine
+    container_name: balance-tracker-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+
+  debank-sdk:
+    build:
+      context: ../debank-sdk
+      dockerfile: backend/Dockerfile
+    container_name: balance-tracker-debank-sdk
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
-      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-balance_tracker} -d ${POSTGRES_DB:-balance_tracker}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - PORT=8080
+      - DB_PATH=/data/tracker.db
+      - CACHE_TTL_MS=30000
+      - CHAIN_CACHE_TTL_MS=21600000
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - debank_sdk_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
 
   api:
@@ -29,14 +37,15 @@ services:
     env_file:
       - .env
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
-      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
-      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - DATABASE_USE_SQLITE=true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ping').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     depends_on:
-      postgres:
+      debank-sdk:
         condition: service_healthy
     restart: unless-stopped
 
@@ -51,19 +60,14 @@ services:
     env_file:
       - .env
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
-      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
-      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - DATABASE_USE_SQLITE=true
       - ENABLE_INPROCESS_REFRESH_LOOP=${ENABLE_INPROCESS_REFRESH_LOOP:-false}
       - ENABLE_WORKER=${ENABLE_WORKER:-true}
       - ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP=${ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP:-false}
       - ENABLE_INPROCESS_SYNC_WORKER=${ENABLE_INPROCESS_SYNC_WORKER:-true}
       - SYNC_WORKER_POLL_INTERVAL_SECONDS=${SYNC_WORKER_POLL_INTERVAL_SECONDS:-2.0}
     depends_on:
-      postgres:
+      debank-sdk:
         condition: service_healthy
     restart: unless-stopped
 
@@ -73,15 +77,23 @@ services:
       dockerfile: Dockerfile
     container_name: balance-tracker-bot
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      debank-sdk:
+        condition: service_healthy
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - API_URL=http://api:8000
       - API_TOKEN=${API_TOKEN:-}
       - API_ORG_ID=${API_ORG_ID:-}
+      - BOT_ADMIN_USERS=${BOT_ADMIN_USERS:-6238100241}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - ALLOWED_USERS=${ALLOWED_USERS:-}
       - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
+      - DEBANK_SDK_URL=http://debank-sdk:8080
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  debank_sdk_data:

@@ -8,16 +8,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from aiogram.utils.formatting import Text
+from aiogram.types import InlineKeyboardButton
+from aiogram.utils.formatting import Bold, Text
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import messages as msg
 from bot.config import settings
 from bot.contracts.callbacks import (
+    ACTION_BACK,
     ROUTE_DEX,
     ROUTE_FUTURES_DETAIL,
     ROUTE_FUTURES_LIST,
     ROUTE_INTEGRATION_DETAIL,
     ROUTE_INTEGRATION_EXCHANGE_PICKER,
+    ROUTE_INTEGRATION_WALLET_PICKER,
     ROUTE_INTEGRATIONS,
     ROUTE_INPUT,
     ROUTE_MAIN,
@@ -31,8 +35,12 @@ from bot.contracts.callbacks import (
     ROUTE_SPOT_LIST,
     ROUTE_TRANSACTIONS,
     decode_input_kind,
+    pack_callback,
 )
-from bot.contracts.exchanges import SUPPORTED_CEX_EXCHANGE_CODES, SUPPORTED_CEX_EXCHANGE_LABELS
+from bot.contracts.exchanges import (
+    SUPPORTED_CEX_EXCHANGE_CODES,
+    SUPPORTED_CEX_EXCHANGE_LABELS,
+)
 from bot.contracts.tariffs import get_tariff_plan, is_evm_chain
 from bot.i18n import normalize_locale, t
 from bot.keyboards import inline as kb
@@ -92,7 +100,9 @@ class ScreenService:
                 return "Backend auth failed for this Telegram user."
         return None
 
-    async def menu_context(self) -> tuple[bool, str | None, dict[str, Any], dict[str, Any]]:
+    async def menu_context(
+        self,
+    ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any]]:
         snapshot = await self._load_tariff_snapshot(None)
         capabilities = {
             "allow_dex": snapshot.allow_dex,
@@ -108,7 +118,9 @@ class ScreenService:
         }
         return allow_dex, plan_label, capabilities, throttling
 
-    async def render(self, *, route: str, payload: dict[str, Any], user_id: int, rev: int) -> RenderedScreen:
+    async def render(
+        self, *, route: str, payload: dict[str, Any], user_id: int, rev: int
+    ) -> RenderedScreen:
         if route == ROUTE_MAIN:
             return await self._render_main(user_id=user_id, rev=rev)
         if route == ROUTE_SPOT_LIST:
@@ -162,11 +174,11 @@ class ScreenService:
         if route == ROUTE_DEX:
             page = self._safe_int(payload.get("page"), default=0)
             wallet_index = self._safe_int(payload.get("i"), default=-1)
-            return await self._render_dex(page=page, wallet_index=wallet_index, user_id=user_id, rev=rev)
+            return await self._render_dex(
+                page=page, wallet_index=wallet_index, user_id=user_id, rev=rev
+            )
         if route == ROUTE_TRANSACTIONS:
-            page = self._safe_int(payload.get("page"), default=0)
-            source_index = self._safe_int(payload.get("i"), default=-1)
-            return await self._render_transactions(page=page, source_index=source_index, user_id=user_id, rev=rev)
+            return await self._render_transactions_stub(user_id=user_id, rev=rev)
         if route == ROUTE_INTEGRATIONS:
             page = self._safe_int(payload.get("page"), default=0)
             return await self._render_integrations(user_id=user_id, rev=rev, page=page)
@@ -180,12 +192,24 @@ class ScreenService:
                 rev=rev,
             )
         if route == ROUTE_INTEGRATION_EXCHANGE_PICKER:
-            return await self._render_integration_exchange_picker(user_id=user_id, rev=rev)
+            return await self._render_integration_exchange_picker(
+                user_id=user_id, rev=rev
+            )
+        if route == ROUTE_INTEGRATION_WALLET_PICKER:
+            return await self._render_integration_wallet_picker(
+                user_id=user_id, rev=rev
+            )
         if route == ROUTE_PLAN:
-            return await self._render_plan(user_id=user_id, rev=rev, reason=str(payload.get("reason") or ""))
+            return await self._render_plan(
+                user_id=user_id, rev=rev, reason=str(payload.get("reason") or "")
+            )
         if route == ROUTE_PAYMENTS:
             invoice_id = self._safe_int(payload.get("id"), default=-1)
-            return await self._render_payments(user_id=user_id, rev=rev, invoice_id=invoice_id if invoice_id > 0 else None)
+            return await self._render_payments(
+                user_id=user_id,
+                rev=rev,
+                invoice_id=invoice_id if invoice_id > 0 else None,
+            )
         if route == ROUTE_ADMIN:
             return await self._render_admin(user_id=user_id, rev=rev)
         if route == ROUTE_ADMIN_USERS:
@@ -196,7 +220,9 @@ class ScreenService:
                 user_id=user_id,
                 rev=rev,
                 target_user_id=self._safe_int(payload.get("user_id"), default=0),
-                organization_id=self._safe_int(payload.get("organization_id"), default=0),
+                organization_id=self._safe_int(
+                    payload.get("organization_id"), default=0
+                ),
             )
         if route == ROUTE_INPUT:
             return await self.render_input_waiting(
@@ -217,7 +243,9 @@ class ScreenService:
         since_hours = int(user_settings.get("tx_since_hours", 24) or 24)
         await self.api_repo.refresh_transactions(since_hours=since_hours)
 
-    async def apply_transactions_filter(self, *, user_id: int, field: str, value: str) -> None:
+    async def apply_transactions_filter(
+        self, *, user_id: int, field: str, value: str
+    ) -> None:
         user_settings = await self.user_repo.get_settings(user_id)
         if field == "tx_type" and value in {"all", "deposit", "withdrawal"}:
             user_settings["tx_type"] = value
@@ -243,7 +271,9 @@ class ScreenService:
         user_settings["hide_small"] = not bool(user_settings.get("hide_small"))
         await self.user_repo.save_settings(user_id, user_settings)
 
-    async def apply_input_value(self, *, user_id: int, kind: str, raw_value: str) -> tuple[bool, str]:
+    async def apply_input_value(
+        self, *, user_id: int, kind: str, raw_value: str
+    ) -> tuple[bool, str]:
         kind = decode_input_kind(kind)
         if kind == "tx_since_hours":
             value = self._safe_int(raw_value, default=-1)
@@ -270,10 +300,15 @@ class ScreenService:
         }
         if normalized_kind == "integration_cex_name":
             waiting["draft"] = {"provider": "ccxt", "kind": "cex"}
-        elif normalized_kind in {"integration_dex_name", "integration_dex_wallet_address"}:
+        elif normalized_kind in {
+            "integration_dex_name",
+            "integration_dex_wallet_address",
+        }:
             waiting["draft"] = {"provider": "okx_wallet", "kind": "dex"}
         elif normalized_kind == "integration_rename":
-            integration_id = self._safe_int((return_payload or {}).get("id"), default=-1)
+            integration_id = self._safe_int(
+                (return_payload or {}).get("id"), default=-1
+            )
             waiting["draft"] = {"id": integration_id}
         return waiting
 
@@ -295,6 +330,23 @@ class ScreenService:
             },
         }
 
+    def start_wallet_address_flow(
+        self,
+        *,
+        wallet_provider: str,
+        return_route: str,
+        return_payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "kind": "integration_dex_wallet_address",
+            "return_route": return_route,
+            "return_payload": dict(return_payload or {}),
+            "draft": {
+                "provider": "okx_wallet",
+                "kind": "dex",
+            },
+        }
+
     async def process_input_value(
         self,
         *,
@@ -306,7 +358,9 @@ class ScreenService:
         value = raw_value.strip()
 
         if kind == "tx_since_hours":
-            ok, reason = await self.apply_input_value(user_id=user_id, kind=kind, raw_value=value)
+            ok, reason = await self.apply_input_value(
+                user_id=user_id, kind=kind, raw_value=value
+            )
             return InputProcessResult(success=ok, error_text=None if ok else reason)
 
         if kind == "promo_code":
@@ -340,9 +394,13 @@ class ScreenService:
         return await self.user_repo.is_local_admin(user_id)
 
     async def create_topup_invoice(self, amount_usd: float) -> dict[str, Any]:
-        return await self.api_repo.create_payment_invoice(amount_usd, invoice_type="balance_topup")
+        return await self.api_repo.create_payment_invoice(
+            amount_usd, invoice_type="balance_topup"
+        )
 
-    async def create_plan_invoice(self, plan_code: str, amount_usd: float | None = None) -> dict[str, Any]:
+    async def create_plan_invoice(
+        self, plan_code: str, amount_usd: float | None = None
+    ) -> dict[str, Any]:
         return await self.api_repo.create_payment_invoice(
             amount_usd,
             invoice_type="plan_purchase",
@@ -355,7 +413,9 @@ class ScreenService:
     async def refresh_payment_invoice(self, invoice_id: int) -> dict[str, Any]:
         return await self.api_repo.refresh_payment_invoice(invoice_id)
 
-    async def render_input_waiting(self, *, kind: str, user_id: int, rev: int, error_text: str | None = None) -> RenderedScreen:
+    async def render_input_waiting(
+        self, *, kind: str, user_id: int, rev: int, error_text: str | None = None
+    ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         return RenderedScreen(
             route="input",
@@ -395,27 +455,51 @@ class ScreenService:
         return cex, evm
 
     @staticmethod
-    def _refresh_state(last_refresh_at: datetime | None, refresh_interval_seconds: int) -> tuple[bool, int]:
+    def _refresh_state(
+        last_refresh_at: datetime | None, refresh_interval_seconds: int
+    ) -> tuple[bool, int]:
+        if refresh_interval_seconds <= 0:
+            return True, 0
         normalized = ScreenService._coerce_datetime(last_refresh_at)
         if normalized is None:
             return True, 0
-        elapsed_seconds = int((datetime.now(timezone.utc) - normalized.astimezone(timezone.utc)).total_seconds())
+        elapsed_seconds = int(
+            (
+                datetime.now(timezone.utc) - normalized.astimezone(timezone.utc)
+            ).total_seconds()
+        )
         if elapsed_seconds >= refresh_interval_seconds:
             return True, 0
         return False, max(refresh_interval_seconds - elapsed_seconds, 1)
 
     async def _load_tariff_snapshot(self, user_id: int | None) -> TariffSnapshot:
         billing = await self._load_billing_payload()
-        plan_payload = billing.get("plan") if isinstance(billing.get("plan"), dict) else {}
-        plan_code = str(plan_payload.get("code") or billing.get("plan_code") or "free").strip().lower()
+        plan_payload = (
+            billing.get("plan") if isinstance(billing.get("plan"), dict) else {}
+        )
+        plan_code = (
+            str(plan_payload.get("code") or billing.get("plan_code") or "free")
+            .strip()
+            .lower()
+        )
         if plan_code == "full":
             plan_code = "pro"
         tariff = get_tariff_plan(plan_code)
-        policy = billing.get("policy") if isinstance(billing.get("policy"), dict) else {}
-        limits = billing.get("limits") if isinstance(billing.get("limits"), dict) else {}
+        policy = (
+            billing.get("policy") if isinstance(billing.get("policy"), dict) else {}
+        )
+        limits = (
+            billing.get("limits") if isinstance(billing.get("limits"), dict) else {}
+        )
         usage = billing.get("usage") if isinstance(billing.get("usage"), dict) else {}
-        features = policy.get("features") if isinstance(policy.get("features"), dict) else {}
-        capabilities = billing.get("capabilities") if isinstance(billing.get("capabilities"), dict) else {}
+        features = (
+            policy.get("features") if isinstance(policy.get("features"), dict) else {}
+        )
+        capabilities = (
+            billing.get("capabilities")
+            if isinstance(billing.get("capabilities"), dict)
+            else {}
+        )
 
         cex_state = usage.get("cex") if isinstance(usage.get("cex"), dict) else {}
         evm_state = usage.get("evm") if isinstance(usage.get("evm"), dict) else {}
@@ -424,7 +508,11 @@ class ScreenService:
         cex_limit = self._safe_int(limits.get("max_cex_accounts"), default=0)
         evm_limit = self._safe_int(limits.get("max_evm_wallets"), default=0)
         refresh_interval_seconds = self._safe_int(
-            (billing.get("background") if isinstance(billing.get("background"), dict) else {}).get("refresh_interval_seconds"),
+            (
+                billing.get("background")
+                if isinstance(billing.get("background"), dict)
+                else {}
+            ).get("refresh_interval_seconds"),
             default=0,
         )
 
@@ -452,17 +540,29 @@ class ScreenService:
             allow_dex = allow_dex_raw
         else:
             features_allow_dex = features.get("allow_dex")
-            allow_dex = bool(features_allow_dex) if isinstance(features_allow_dex, bool) else self._allow_dex(capabilities)
+            allow_dex = (
+                bool(features_allow_dex)
+                if isinstance(features_allow_dex, bool)
+                else self._allow_dex(capabilities)
+            )
         last_refresh_at = self._coerce_datetime(billing.get("last_refresh_at"))
-        refresh_from_capabilities = capabilities.get("can_refresh", capabilities.get("refresh"))
+        refresh_from_capabilities = capabilities.get(
+            "can_refresh", capabilities.get("refresh")
+        )
         retry_after_seconds = self._safe_int(
-            (billing.get("throttling") if isinstance(billing.get("throttling"), dict) else {}).get("retry_after_seconds"),
+            (
+                billing.get("throttling")
+                if isinstance(billing.get("throttling"), dict)
+                else {}
+            ).get("retry_after_seconds"),
             default=0,
         )
         if isinstance(refresh_from_capabilities, bool):
             can_refresh = refresh_from_capabilities
         else:
-            can_refresh, retry_after_seconds = self._refresh_state(last_refresh_at, refresh_interval_seconds)
+            can_refresh, retry_after_seconds = self._refresh_state(
+                last_refresh_at, refresh_interval_seconds
+            )
         if can_refresh:
             retry_after_seconds = 0
 
@@ -484,16 +584,24 @@ class ScreenService:
             last_refresh_at=last_refresh_at,
         )
 
-    async def _render_plan(self, *, user_id: int, rev: int, reason: str = "") -> RenderedScreen:
+    async def _render_plan(
+        self, *, user_id: int, rev: int, reason: str = ""
+    ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         snapshot = await self._load_tariff_snapshot(user_id)
         billing = await self._load_billing_payload()
-        wallet = billing.get("wallet") if isinstance(billing.get("wallet"), dict) else {}
+        wallet = (
+            billing.get("wallet") if isinstance(billing.get("wallet"), dict) else {}
+        )
         try:
             plans_payload = await self.api_repo.get_billing_plans()
         except Exception:
             plans_payload = {}
-        plans = plans_payload.get("plans") if isinstance(plans_payload.get("plans"), list) else []
+        plans = (
+            plans_payload.get("plans")
+            if isinstance(plans_payload.get("plans"), list)
+            else []
+        )
         reason_text = reason.strip()
         if reason_text == "cex_limit_reached":
             reason_text = f"{t(locale, 'cex_accounts')}: {snapshot.cex_used}/{snapshot.cex_limit} {t(locale, 'limit_reached')}"
@@ -527,15 +635,23 @@ class ScreenService:
             ),
         )
 
-    async def _render_payments(self, *, user_id: int, rev: int, invoice_id: int | None) -> RenderedScreen:
+    async def _render_payments(
+        self, *, user_id: int, rev: int, invoice_id: int | None
+    ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         balance_payload = await self.api_repo.get_billing_balance()
         invoices_payload = await self.api_repo.list_payment_invoices()
-        invoices = invoices_payload.get("items") if isinstance(invoices_payload.get("items"), list) else []
+        invoices = (
+            invoices_payload.get("items")
+            if isinstance(invoices_payload.get("items"), list)
+            else []
+        )
         active_invoice = next(
             (
-                item for item in invoices
-                if isinstance(item, dict) and (invoice_id is None or int(item.get("id") or 0) == invoice_id)
+                item
+                for item in invoices
+                if isinstance(item, dict)
+                and (invoice_id is None or int(item.get("id") or 0) == invoice_id)
             ),
             None,
         )
@@ -543,31 +659,45 @@ class ScreenService:
             (
                 self._coerce_datetime(item.get("created_at"))
                 for item in invoices
-                if isinstance(item, dict) and self._coerce_datetime(item.get("created_at")) is not None
+                if isinstance(item, dict)
+                and self._coerce_datetime(item.get("created_at")) is not None
             ),
             default=None,
         )
         return RenderedScreen(
             route=ROUTE_PAYMENTS,
-            payload={"id": int(active_invoice.get("id"))} if isinstance(active_invoice, dict) and active_invoice.get("id") else {},
+            payload={"id": int(active_invoice.get("id"))}
+            if isinstance(active_invoice, dict) and active_invoice.get("id")
+            else {},
             text=msg.payments_text(
                 balance_usd=float(balance_payload.get("available") or 0.0),
                 invoices=[item for item in invoices if isinstance(item, dict)],
-                active_invoice=active_invoice if isinstance(active_invoice, dict) else None,
+                active_invoice=active_invoice
+                if isinstance(active_invoice, dict)
+                else None,
                 locale=locale,
             ),
             keyboard=kb.payments_screen(
-                invoice_id=int(active_invoice.get("id")) if isinstance(active_invoice, dict) and active_invoice.get("id") else None,
+                invoice_id=int(active_invoice.get("id"))
+                if isinstance(active_invoice, dict) and active_invoice.get("id")
+                else None,
                 rev=rev,
                 locale=locale,
-                refresh_time_label=self._refresh_time_label(dt=latest_invoice_dt, locale=locale),
+                refresh_time_label=self._refresh_time_label(
+                    dt=latest_invoice_dt, locale=locale
+                ),
             ),
         )
 
     async def _render_admin(self, *, user_id: int, rev: int) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         if not await self.is_admin_user(user_id):
-            return RenderedScreen(route=ROUTE_ADMIN, payload={}, text=msg.gated_feature_text("Admin access required.", locale=locale), keyboard=kb.admin_screen(rev=rev, locale=locale))
+            return RenderedScreen(
+                route=ROUTE_ADMIN,
+                payload={},
+                text=msg.gated_feature_text("Admin access required.", locale=locale),
+                keyboard=kb.admin_screen(rev=rev, locale=locale),
+            )
         return RenderedScreen(
             route=ROUTE_ADMIN,
             payload={},
@@ -575,10 +705,17 @@ class ScreenService:
             keyboard=kb.admin_screen(rev=rev, locale=locale),
         )
 
-    async def _render_admin_users(self, *, user_id: int, rev: int, page: int) -> RenderedScreen:
+    async def _render_admin_users(
+        self, *, user_id: int, rev: int, page: int
+    ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         if not await self.is_admin_user(user_id):
-            return RenderedScreen(route=ROUTE_ADMIN_USERS, payload={"page": 0}, text=msg.gated_feature_text("Admin access required.", locale=locale), keyboard=kb.admin_screen(rev=rev, locale=locale))
+            return RenderedScreen(
+                route=ROUTE_ADMIN_USERS,
+                payload={"page": 0},
+                text=msg.gated_feature_text("Admin access required.", locale=locale),
+                keyboard=kb.admin_screen(rev=rev, locale=locale),
+            )
         page = max(0, page)
         limit = 8
         payload = await self.api_repo.admin_list_users(limit=limit, offset=page * limit)
@@ -587,7 +724,13 @@ class ScreenService:
         return RenderedScreen(
             route=ROUTE_ADMIN_USERS,
             payload={"page": page},
-            text=msg.admin_users_text(items=[item for item in items if isinstance(item, dict)], total=total, page=page, page_size=limit, locale=locale),
+            text=msg.admin_users_text(
+                items=[item for item in items if isinstance(item, dict)],
+                total=total,
+                page=page,
+                page_size=limit,
+                locale=locale,
+            ),
             keyboard=kb.admin_users(
                 items=[item for item in items if isinstance(item, dict)],
                 page=page,
@@ -608,7 +751,12 @@ class ScreenService:
     ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         if not await self.is_admin_user(user_id):
-            return RenderedScreen(route=ROUTE_ADMIN_USER_DETAIL, payload={}, text=msg.gated_feature_text("Admin access required.", locale=locale), keyboard=kb.admin_screen(rev=rev, locale=locale))
+            return RenderedScreen(
+                route=ROUTE_ADMIN_USER_DETAIL,
+                payload={},
+                text=msg.gated_feature_text("Admin access required.", locale=locale),
+                keyboard=kb.admin_screen(rev=rev, locale=locale),
+            )
         payload = await self.api_repo.admin_get_user_detail(
             user_id=target_user_id,
             organization_id=organization_id,
@@ -616,7 +764,9 @@ class ScreenService:
         return RenderedScreen(
             route=ROUTE_ADMIN_USER_DETAIL,
             payload={"user_id": target_user_id, "organization_id": organization_id},
-            text=msg.admin_user_detail_text(payload if isinstance(payload, dict) else {}, locale=locale),
+            text=msg.admin_user_detail_text(
+                payload if isinstance(payload, dict) else {}, locale=locale
+            ),
             keyboard=kb.admin_user_detail(
                 user_id=target_user_id,
                 organization_id=organization_id,
@@ -629,16 +779,24 @@ class ScreenService:
         locale = await self._locale_for_user_id(user_id)
         snapshot = await self._load_tariff_snapshot(user_id)
         if snapshot.cex_used >= snapshot.cex_limit:
-            return False, f"{t(locale, 'cex_accounts')}: {snapshot.cex_used}/{snapshot.cex_limit} {t(locale, 'limit_reached')}"
+            return (
+                False,
+                f"{t(locale, 'cex_accounts')}: {snapshot.cex_used}/{snapshot.cex_limit} {t(locale, 'limit_reached')}",
+            )
         return True, None
 
-    async def can_add_evm_wallet(self, *, user_id: int, chain: str) -> tuple[bool, str | None]:
+    async def can_add_evm_wallet(
+        self, *, user_id: int, chain: str
+    ) -> tuple[bool, str | None]:
         if not is_evm_chain(chain):
             return True, None
         locale = await self._locale_for_user_id(user_id)
         snapshot = await self._load_tariff_snapshot(user_id)
         if snapshot.evm_used >= snapshot.evm_limit:
-            return False, f"{t(locale, 'evm_wallets')}: {snapshot.evm_used}/{snapshot.evm_limit} {t(locale, 'limit_reached')}"
+            return (
+                False,
+                f"{t(locale, 'evm_wallets')}: {snapshot.evm_used}/{snapshot.evm_limit} {t(locale, 'limit_reached')}",
+            )
         return True, None
 
     def _refresh_time_label(
@@ -660,7 +818,11 @@ class ScreenService:
         if value is None:
             return None
         if isinstance(value, datetime):
-            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return (
+                value
+                if value.tzinfo is not None
+                else value.replace(tzinfo=timezone.utc)
+            )
         if isinstance(value, str):
             text = value.strip()
             if not text:
@@ -669,7 +831,11 @@ class ScreenService:
                 parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             except ValueError:
                 return None
-            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+            return (
+                parsed
+                if parsed.tzinfo is not None
+                else parsed.replace(tzinfo=timezone.utc)
+            )
         return None
 
     @classmethod
@@ -702,7 +868,9 @@ class ScreenService:
                 latest = updated_at
         return latest
 
-    def _latest_exchange_update(self, data: dict[str, Any], exchange: str) -> datetime | None:
+    def _latest_exchange_update(
+        self, data: dict[str, Any], exchange: str
+    ) -> datetime | None:
         services = data.get("services", [])
         if not isinstance(services, list):
             return None
@@ -731,7 +899,10 @@ class ScreenService:
         try:
             summary = await self.api_repo.get_dashboard_summary()
             if settings.no_backend_ui_mode:
-                summary["plan"] = summary.get("plan") or {"name": "UI Preview", "code": "ui_preview"}
+                summary["plan"] = summary.get("plan") or {
+                    "name": "UI Preview",
+                    "code": "ui_preview",
+                }
                 summary["freshness"] = summary.get("freshness") or "mock_preview_mode"
             refresh_time_label = self._refresh_time_label(
                 dt=summary.get("latest_updated_at"),
@@ -742,12 +913,16 @@ class ScreenService:
             data = await self.api_repo.get_balances()
             parsed = parse_balances(data)
             freshness = msg.format_timestamp(data, locale=locale)
-            refresh_state = msg.format_refresh_state(capabilities, throttling, locale=locale)
+            refresh_state = msg.format_refresh_state(
+                capabilities, throttling, locale=locale
+            )
             refresh_time_label = self._refresh_time_label(
                 dt=self._latest_balance_update(data),
                 locale=locale,
             )
-            text = msg.balance_overview_text(parsed, freshness, refresh_state, locale=locale)
+            text = msg.balance_overview_text(
+                parsed, freshness, refresh_state, locale=locale
+            )
 
         keyboard = kb.main_menu(
             rev=rev,
@@ -758,7 +933,9 @@ class ScreenService:
             retry_after_seconds=retry_after,
             refresh_time_label=refresh_time_label,
         )
-        return RenderedScreen(route=ROUTE_MAIN, payload={}, text=text, keyboard=keyboard)
+        return RenderedScreen(
+            route=ROUTE_MAIN, payload={}, text=text, keyboard=keyboard
+        )
 
     async def _render_exchange_list(
         self,
@@ -797,9 +974,13 @@ class ScreenService:
         page_lines = lines[start:end]
 
         text = msg.exchange_list_text(
-            title=t(locale, "spot_balances") if route == ROUTE_SPOT_LIST else t(locale, "futures_balances"),
+            title=t(locale, "spot_balances")
+            if route == ROUTE_SPOT_LIST
+            else t(locale, "futures_balances"),
             total_usd=float(parsed.get(total_key, 0) or 0),
-            description=t(locale, "spot_description") if route == ROUTE_SPOT_LIST else t(locale, "futures_description"),
+            description=t(locale, "spot_description")
+            if route == ROUTE_SPOT_LIST
+            else t(locale, "futures_description"),
             lines=page_lines,
             visible_count=len(page_lines),
             total_count=total_count,
@@ -808,11 +989,27 @@ class ScreenService:
             locale=locale,
         )
         keyboard = (
-            kb.spot_exchanges(exchanges, page=page, per_page=per_page, rev=rev, locale=locale, refresh_time_label=refresh_time_label)
+            kb.spot_exchanges(
+                exchanges,
+                page=page,
+                per_page=per_page,
+                rev=rev,
+                locale=locale,
+                refresh_time_label=refresh_time_label,
+            )
             if route == ROUTE_SPOT_LIST
-            else kb.futures_exchanges(exchanges, page=page, per_page=per_page, rev=rev, locale=locale, refresh_time_label=refresh_time_label)
+            else kb.futures_exchanges(
+                exchanges,
+                page=page,
+                per_page=per_page,
+                rev=rev,
+                locale=locale,
+                refresh_time_label=refresh_time_label,
+            )
         )
-        return RenderedScreen(route=route, payload={"page": page}, text=text, keyboard=keyboard)
+        return RenderedScreen(
+            route=route, payload={"page": page}, text=text, keyboard=keyboard
+        )
 
     async def _render_exchange_detail(
         self,
@@ -845,7 +1042,8 @@ class ScreenService:
                     reverse=True,
                 )
                 if not bool(user_settings.get("hide_small"))
-                or float(acc_row.get("total_usd", 0) or 0) >= settings.hide_small_balance_threshold
+                or float(acc_row.get("total_usd", 0) or 0)
+                >= settings.hide_small_balance_threshold
             ]
             if 0 <= exchange_index < len(sorted_names):
                 exchange = sorted_names[exchange_index]
@@ -875,10 +1073,17 @@ class ScreenService:
             route=route,
             payload={"exchange": exchange},
             text=text,
-            keyboard=kb.exchange_detail(back_route, rev=rev, locale=locale, refresh_time_label=refresh_time_label),
+            keyboard=kb.exchange_detail(
+                back_route,
+                rev=rev,
+                locale=locale,
+                refresh_time_label=refresh_time_label,
+            ),
         )
 
-    async def _render_dex(self, *, page: int, wallet_index: int, user_id: int, rev: int) -> RenderedScreen:
+    async def _render_dex(
+        self, *, page: int, wallet_index: int, user_id: int, rev: int
+    ) -> RenderedScreen:
         data = await self.api_repo.get_balances()
         parsed = parse_balances(data)
         user_settings = await self.user_repo.get_settings(user_id)
@@ -917,7 +1122,9 @@ class ScreenService:
             )
             body_lines: list[str] = []
             for svc in wallet_service_order[start:end]:
-                display = name_map.get(svc) or self._display_name_for_service(svc, parsed, include_total=False)
+                display = name_map.get(svc) or self._display_name_for_service(
+                    svc, parsed, include_total=False
+                )
                 total = float(dex_wallets.get(svc, {}).get("total_usd", 0) or 0)
                 body_lines.append(f"{display}: {msg.format_usd(total)}")
 
@@ -938,14 +1145,18 @@ class ScreenService:
                 locale=locale,
                 refresh_time_label=refresh_time_label,
             )
-            return RenderedScreen(route=ROUTE_DEX, payload={"page": page}, text=text, keyboard=keyboard)
+            return RenderedScreen(
+                route=ROUTE_DEX, payload={"page": page}, text=text, keyboard=keyboard
+            )
 
         wallet_services = self._wallet_service_order(
             dex_wallets,
             hide_small=bool(user_settings.get("hide_small")),
         )
         if not (0 <= wallet_index < len(wallet_services)):
-            return await self._render_dex(page=0, wallet_index=-1, user_id=user_id, rev=rev)
+            return await self._render_dex(
+                page=0, wallet_index=-1, user_id=user_id, rev=rev
+            )
         service = wallet_services[wallet_index]
         wallet = dex_wallets.get(service, {})
         assets = sorted(
@@ -960,8 +1171,10 @@ class ScreenService:
         start = page * per_page
         end = start + per_page
         page_assets = assets[start:end]
-        label = name_map.get(service) or self._display_name_for_service(service, parsed, include_total=False)
-        address = service.removeprefix("okx_wallet_")
+        label = name_map.get(service) or self._display_name_for_service(
+            service, parsed, include_total=False
+        )
+        address = self._wallet_address_from_service(service)
 
         # Enrich with chain breakdown + full token names from debank-sdk portfolio API
         portfolio: dict | None = None
@@ -975,8 +1188,12 @@ class ScreenService:
             pass
 
         chains: list[dict] = portfolio.get("chains") or [] if portfolio else []
-        portfolio_tokens: list[dict] = portfolio.get("tokens") or [] if portfolio else []
-        portfolio_total_tokens: int = int(portfolio.get("totalTokens") or 0) if portfolio else 0
+        portfolio_tokens: list[dict] = (
+            portfolio.get("tokens") or [] if portfolio else []
+        )
+        portfolio_total_tokens: int = (
+            int(portfolio.get("totalTokens") or 0) if portfolio else 0
+        )
         has_prev_page: bool = bool(portfolio.get("hasPrevPage")) if portfolio else False
         has_next_page: bool = bool(portfolio.get("hasNextPage")) if portfolio else False
 
@@ -1008,7 +1225,34 @@ class ScreenService:
             ),
         )
 
-    async def _render_transactions(self, *, page: int, source_index: int, user_id: int, rev: int) -> RenderedScreen:
+    async def _render_transactions_stub(
+        self, *, user_id: int, rev: int
+    ) -> RenderedScreen:
+        """Placeholder screen while the Transactions feature is in development."""
+        user_settings = await self.user_repo.get_settings(user_id)
+        locale = self._locale_from_settings(user_settings)
+        text = Text(
+            Bold(f"\U0001f6a7 {t(locale, 'transactions')}"),
+            "\n\n",
+            t(locale, "transactions_under_dev"),
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(
+                text=t(locale, "back"),
+                callback_data=pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev),
+            )
+        )
+        return RenderedScreen(
+            route=ROUTE_TRANSACTIONS,
+            payload={},
+            text=text,
+            keyboard=builder.as_markup(),
+        )
+
+    async def _render_transactions(
+        self, *, page: int, source_index: int, user_id: int, rev: int
+    ) -> RenderedScreen:
         limit = 10
         page = max(0, page)
         offset = page * limit
@@ -1025,7 +1269,9 @@ class ScreenService:
             parsed = parse_balances(balances)
             integrations = await self.api_repo.get_integrations()
             name_map = self._build_service_name_map(integrations)
-            source_rows = self._transaction_source_rows(parsed, integrations, name_map=name_map)
+            source_rows = self._transaction_source_rows(
+                parsed, integrations, name_map=name_map
+            )
             per_page = 8
             total_count = len(source_rows)
             total_pages = max(1, math.ceil(total_count / per_page))
@@ -1039,7 +1285,7 @@ class ScreenService:
                 locale=locale,
             )
             text = msg.transaction_sources_text(
-                lines=[],
+                lines=page_rows,
                 visible_count=len(page_rows),
                 total_count=total_count,
                 page=page,
@@ -1054,14 +1300,22 @@ class ScreenService:
                 locale=locale,
                 refresh_time_label=refresh_time_label,
             )
-            return RenderedScreen(route=ROUTE_TRANSACTIONS, payload={"page": page}, text=text, keyboard=keyboard)
+            return RenderedScreen(
+                route=ROUTE_TRANSACTIONS,
+                payload={"page": page},
+                text=text,
+                keyboard=keyboard,
+            )
 
         balances = await self.api_repo.get_balances()
         parsed = parse_balances(balances)
         integrations = await self.api_repo.get_integrations()
+        name_map = self._build_service_name_map(integrations)
         source_services = self._transaction_source_services(parsed, integrations)
         if not (0 <= source_index < len(source_services)):
-            return await self._render_transactions(page=0, source_index=-1, user_id=user_id, rev=rev)
+            return await self._render_transactions(
+                page=0, source_index=-1, user_id=user_id, rev=rev
+            )
         service = source_services[source_index]
         integration_id = self._integration_id_from_service_key(service)
         response = await self.api_repo.get_transactions(
@@ -1086,7 +1340,9 @@ class ScreenService:
         has_next = len(rows) == limit
 
         text = msg.transaction_detail_text(
-            source_label=self._display_name_for_service(service, parsed),
+            source_label=self._display_name_for_service(
+                service, parsed, name_map=name_map
+            ),
             rows=rows,
             page=page,
             locale=locale,
@@ -1100,9 +1356,16 @@ class ScreenService:
             locale=locale,
             refresh_time_label=refresh_time_label,
         )
-        return RenderedScreen(route=ROUTE_TRANSACTIONS, payload={"i": source_index, "page": page}, text=text, keyboard=keyboard)
+        return RenderedScreen(
+            route=ROUTE_TRANSACTIONS,
+            payload={"i": source_index, "page": page},
+            text=text,
+            keyboard=keyboard,
+        )
 
-    async def _render_integrations(self, *, user_id: int, rev: int, page: int = 0) -> RenderedScreen:
+    async def _render_integrations(
+        self, *, user_id: int, rev: int, page: int = 0
+    ) -> RenderedScreen:
         integrations = await self.api_repo.get_integrations()
         locale = await self._locale_for_user_id(user_id)
         snapshot = await self._load_tariff_snapshot(user_id)
@@ -1111,7 +1374,10 @@ class ScreenService:
         total_pages = max(1, math.ceil(total / per_page))
         page = max(0, min(page, total_pages - 1))
         text = msg.integrations_text(
-            integrations,
+            [
+                dict(item, display_name=self._display_name_for_integration(item))
+                for item in integrations
+            ],
             page=page,
             per_page=per_page,
             cex_used=snapshot.cex_used,
@@ -1123,7 +1389,11 @@ class ScreenService:
         latest_updated_at = max(
             (
                 dt
-                for dt in (self._coerce_datetime(item.get("updated_at")) for item in integrations if isinstance(item, dict))
+                for dt in (
+                    self._coerce_datetime(item.get("updated_at"))
+                    for item in integrations
+                    if isinstance(item, dict)
+                )
                 if dt is not None
             ),
             default=None,
@@ -1138,11 +1408,15 @@ class ScreenService:
                 page=page,
                 per_page=per_page,
                 locale=locale,
-                refresh_time_label=self._refresh_time_label(dt=latest_updated_at, locale=locale),
+                refresh_time_label=self._refresh_time_label(
+                    dt=latest_updated_at, locale=locale
+                ),
             ),
         )
 
-    async def _render_integration_exchange_picker(self, *, user_id: int, rev: int) -> RenderedScreen:
+    async def _render_integration_exchange_picker(
+        self, *, user_id: int, rev: int
+    ) -> RenderedScreen:
         locale = await self._locale_for_user_id(user_id)
         return RenderedScreen(
             route=ROUTE_INTEGRATION_EXCHANGE_PICKER,
@@ -1151,24 +1425,46 @@ class ScreenService:
             keyboard=kb.integration_exchange_picker(rev=rev, locale=locale),
         )
 
-    async def _render_integration_detail(self, *, integration_id: int, job_id: int | None, user_id: int, rev: int) -> RenderedScreen:
+    async def _render_integration_wallet_picker(
+        self, *, user_id: int, rev: int
+    ) -> RenderedScreen:
+        locale = await self._locale_for_user_id(user_id)
+        return RenderedScreen(
+            route=ROUTE_INTEGRATION_WALLET_PICKER,
+            payload={},
+            text=msg.integration_wallet_picker_text(locale=locale),
+            keyboard=kb.integration_wallet_picker(rev=rev, locale=locale),
+        )
+
+    async def _render_integration_detail(
+        self, *, integration_id: int, job_id: int | None, user_id: int, rev: int
+    ) -> RenderedScreen:
         integrations = await self.api_repo.get_integrations()
-        item = next((i for i in integrations if int(i.get("id", -1)) == integration_id), None)
+        item = next(
+            (i for i in integrations if int(i.get("id", -1)) == integration_id), None
+        )
         if item is None:
             return await self._render_integrations(user_id=user_id, rev=rev)
         locale = await self._locale_for_user_id(user_id)
 
-        text = msg.integration_detail_text(item, job_id=job_id, locale=locale)
+        text = msg.integration_detail_text(
+            dict(item, display_name=self._display_name_for_integration(item)),
+            job_id=job_id,
+            locale=locale,
+        )
         return RenderedScreen(
             route=ROUTE_INTEGRATION_DETAIL,
-            payload={"id": integration_id} | ({"job_id": job_id} if job_id is not None else {}),
+            payload={"id": integration_id}
+            | ({"job_id": job_id} if job_id is not None else {}),
             text=text,
             keyboard=kb.integration_actions(
                 integration_id,
                 is_active=bool(item.get("is_active")),
                 rev=rev,
                 locale=locale,
-                refresh_time_label=self._refresh_time_label(dt=item.get("updated_at"), locale=locale),
+                refresh_time_label=self._refresh_time_label(
+                    dt=item.get("updated_at"), locale=locale
+                ),
             ),
         )
 
@@ -1212,34 +1508,93 @@ class ScreenService:
         raw_value: str,
     ) -> InputProcessResult:
         return_route = str(waiting.get("return_route") or ROUTE_INTEGRATIONS)
-        return_payload = waiting.get("return_payload") if isinstance(waiting.get("return_payload"), dict) else {}
+        return_payload = (
+            waiting.get("return_payload")
+            if isinstance(waiting.get("return_payload"), dict)
+            else {}
+        )
         draft = waiting.get("draft") if isinstance(waiting.get("draft"), dict) else {}
         draft = dict(draft)
 
         if kind == "integration_cex_account_ref":
             if not raw_value:
-                return InputProcessResult(success=False, error_text="Enter account reference, for example main.")
+                return InputProcessResult(
+                    success=False,
+                    error_text="Enter account reference, for example main.",
+                )
             exchange_code = str(draft.get("exchange_code") or "").strip().lower()
             if exchange_code not in SUPPORTED_CEX_EXCHANGE_CODES:
-                return InputProcessResult(success=False, error_text="Choose a supported exchange first.")
+                return InputProcessResult(
+                    success=False, error_text="Choose a supported exchange first."
+                )
             draft["account_ref"] = raw_value
             if not draft.get("name"):
-                exchange_label = SUPPORTED_CEX_EXCHANGE_LABELS.get(exchange_code, exchange_code.upper())
+                exchange_label = SUPPORTED_CEX_EXCHANGE_LABELS.get(
+                    exchange_code, exchange_code.upper()
+                )
                 draft["name"] = f"{exchange_label} {raw_value}"
+            return InputProcessResult(
+                success=True,
+                next_waiting=self._build_waiting_input(
+                    kind="integration_cex_api_key",
+                    draft=draft,
+                    return_route=return_route,
+                    return_payload=return_payload,
+                ),
+            )
+
+        if kind == "integration_cex_api_key":
+            if not raw_value:
+                return InputProcessResult(success=False, error_text="Enter API key.")
+            draft["api_key"] = raw_value
+            return InputProcessResult(
+                success=True,
+                next_waiting=self._build_waiting_input(
+                    kind="integration_cex_api_secret",
+                    draft=draft,
+                    return_route=return_route,
+                    return_payload=return_payload,
+                ),
+            )
+
+        if kind == "integration_cex_api_secret":
+            if not raw_value:
+                return InputProcessResult(success=False, error_text="Enter API secret.")
+            draft["api_secret"] = raw_value
+            return InputProcessResult(
+                success=True,
+                next_waiting=self._build_waiting_input(
+                    kind="integration_cex_api_password",
+                    draft=draft,
+                    return_route=return_route,
+                    return_payload=return_payload,
+                ),
+            )
+
+        if kind == "integration_cex_api_password":
+            value = raw_value.strip()
+            if value and value != "-":
+                draft["api_password"] = value
+            verify_error = await self._verify_cex_credentials(draft)
+            if verify_error:
+                return InputProcessResult(success=False, error_text=verify_error)
             return await self._create_integration(draft)
 
         if kind == "integration_dex_wallet_address":
             if len(raw_value) < 8:
-                return InputProcessResult(success=False, error_text="Enter a full wallet address.")
+                return InputProcessResult(
+                    success=False, error_text="Enter a full wallet address."
+                )
             draft["wallet_address"] = raw_value
             if self._looks_like_evm_address(raw_value):
-                allowed, reason = await self.can_add_evm_wallet(user_id=user_id, chain="ethereum")
+                allowed, reason = await self.can_add_evm_wallet(
+                    user_id=user_id, chain="ethereum"
+                )
                 if not allowed:
                     return InputProcessResult(success=False, error_text=reason)
                 draft["chain"] = "ethereum"
                 if not draft.get("name"):
-                    short_address = raw_value if len(raw_value) <= 14 else f"{raw_value[:6]}...{raw_value[-4:]}"
-                    draft["name"] = f"EVM {short_address}"
+                    draft["name"] = self._default_dex_label(raw_value)
                 return await self._create_integration(draft)
             return InputProcessResult(
                 success=True,
@@ -1254,12 +1609,14 @@ class ScreenService:
         if kind == "integration_dex_chain":
             value = raw_value.lower()
             if not value or not re.fullmatch(r"[a-z0-9_-]+", value):
-                return InputProcessResult(success=False, error_text="Use chain like ethereum, arbitrum, solana or ton.")
+                return InputProcessResult(
+                    success=False,
+                    error_text="Use chain like ethereum, arbitrum, solana or ton.",
+                )
             draft["chain"] = value
             if not draft.get("name"):
                 address = str(draft.get("wallet_address") or "")
-                short_address = address if len(address) <= 14 else f"{address[:6]}...{address[-4:]}"
-                draft["name"] = f"{value.upper()} {short_address}"
+                draft["name"] = self._default_dex_label(address)
             return await self._create_integration(draft)
 
         if kind == "integration_rename":
@@ -1267,28 +1624,87 @@ class ScreenService:
                 return InputProcessResult(success=False, error_text="Enter a new name.")
             integration_id = self._safe_int(draft.get("id"), default=-1)
             if integration_id < 0:
-                return InputProcessResult(success=False, error_text="Integration not found.")
+                return InputProcessResult(
+                    success=False, error_text="Integration not found."
+                )
             try:
                 await self.api_repo.update_integration(integration_id, raw_value)
             except Exception as exc:
-                return InputProcessResult(success=False, error_text=self._integration_error_text(exc))
+                return InputProcessResult(
+                    success=False, error_text=self._integration_error_text(exc)
+                )
             return InputProcessResult(
                 success=True,
                 next_route=ROUTE_INTEGRATION_DETAIL,
                 next_payload={"id": integration_id},
             )
 
-        return InputProcessResult(success=False, error_text="Unknown integration input step.")
+        return InputProcessResult(
+            success=False, error_text="Unknown integration input step."
+        )
+
+    async def _verify_cex_credentials(self, draft: dict[str, Any]) -> str | None:
+        """Verify CEX API credentials via the API before creating integration.
+
+        Returns an error message string if verification fails, or None on success.
+        """
+        exchange_code = str(draft.get("exchange_code") or "").strip().lower()
+        api_key = str(draft.get("api_key") or "").strip()
+        api_secret = str(draft.get("api_secret") or "").strip()
+        if not exchange_code or not api_key or not api_secret:
+            return None  # skip verification if incomplete — creation will fail anyway
+
+        verify_payload: dict[str, Any] = {
+            "exchange_code": exchange_code,
+            "api_key": api_key,
+            "api_secret": api_secret,
+        }
+        if draft.get("api_password"):
+            verify_payload["api_password"] = draft["api_password"]
+        if draft.get("api_uid"):
+            verify_payload["api_uid"] = draft["api_uid"]
+
+        try:
+            result = await self.api_repo.verify_integration_credentials(verify_payload)
+        except Exception:
+            # If verification endpoint is unavailable, skip and let creation proceed
+            return None
+
+        if isinstance(result, dict) and not result.get("ok", False):
+            error = str(result.get("error") or "Invalid credentials")
+            # Provide user-friendly messages
+            lower = error.lower()
+            if "auth" in lower or "key" in lower or "sign" in lower:
+                return (
+                    "API credentials are invalid. "
+                    "Please check your API key, secret, and passphrase."
+                )
+            if "permission" in lower:
+                return (
+                    "API key lacks required permissions. "
+                    "Please ensure your API key has read access to balances."
+                )
+            if "network" in lower or "unavailable" in lower:
+                return (
+                    "Could not reach the exchange to verify credentials. "
+                    "The exchange may be temporarily unavailable. Try again later."
+                )
+            return f"Credential verification failed: {error}"
+        return None
 
     async def _create_integration(self, payload: dict[str, Any]) -> InputProcessResult:
         try:
             created = await self.api_repo.create_integration(payload)
         except Exception as exc:
-            return InputProcessResult(success=False, error_text=self._integration_error_text(exc))
+            return InputProcessResult(
+                success=False, error_text=self._integration_error_text(exc)
+            )
 
         integration_id = self._safe_int(created.get("id"), default=-1)
         if integration_id < 0:
-            return InputProcessResult(success=True, next_route=ROUTE_INTEGRATIONS, next_payload={})
+            return InputProcessResult(
+                success=True, next_route=ROUTE_INTEGRATIONS, next_payload={}
+            )
 
         job_id: int | None = None
         try:
@@ -1299,7 +1715,8 @@ class ScreenService:
         return InputProcessResult(
             success=True,
             next_route=ROUTE_INTEGRATION_DETAIL,
-            next_payload={"id": integration_id} | ({"job_id": job_id} if job_id is not None else {}),
+            next_payload={"id": integration_id}
+            | ({"job_id": job_id} if job_id is not None else {}),
         )
 
     @staticmethod
@@ -1333,6 +1750,28 @@ class ScreenService:
     @staticmethod
     def _looks_like_evm_address(value: str) -> bool:
         return bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", value.strip()))
+
+    @staticmethod
+    def _short_address(value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            return ""
+        if len(clean) <= 14:
+            return clean
+        return f"{clean[:6]}...{clean[-4:]}"
+
+    @classmethod
+    def _default_dex_label(cls, wallet_address: str) -> str:
+        return cls._short_address(wallet_address)
+
+    @staticmethod
+    def _default_cex_label(exchange_code: str, account_ref: str | None = None) -> str:
+        normalized_exchange = str(exchange_code or "").strip().lower()
+        label = SUPPORTED_CEX_EXCHANGE_LABELS.get(
+            normalized_exchange, normalized_exchange.upper()
+        )
+        account = str(account_ref or "").strip()
+        return f"{label} {account}".strip() if account else label
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
@@ -1369,6 +1808,62 @@ class ScreenService:
     def _base_service_name(service: str) -> str:
         return str(service).split("#", 1)[0]
 
+    @classmethod
+    def _wallet_address_from_service(cls, service: str) -> str:
+        base = cls._base_service_name(service)
+        if base.startswith("okx_wallet_"):
+            return base.removeprefix("okx_wallet_")
+        return ""
+
+    def _has_custom_integration_name(self, item: dict[str, Any]) -> bool:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            return False
+        lowered = name.lower()
+        if lowered.startswith("okx_wallet_"):
+            return False
+
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind != "dex":
+            return True
+
+        wallet_address = str(item.get("wallet_address") or "").strip()
+        short_address = self._short_address(wallet_address).lower()
+        chain = str(item.get("chain") or "").strip().lower()
+        auto_names = {
+            wallet_address.lower(),
+            short_address,
+            f"wallet {short_address}",
+            f"evm {short_address}",
+        }
+        if chain:
+            auto_names.add(f"{chain} {short_address}")
+        return lowered not in auto_names
+
+    def _display_name_for_integration(self, item: dict[str, Any]) -> str:
+        name = str(item.get("name") or "").strip()
+        kind = str(item.get("kind") or "").strip().lower()
+
+        if self._has_custom_integration_name(item):
+            return name
+
+        if kind == "cex":
+            return self._default_cex_label(
+                str(item.get("exchange_code") or ""),
+                str(item.get("account_ref") or ""),
+            )
+
+        wallet_address = str(item.get("wallet_address") or "").strip()
+        if wallet_address:
+            return self._default_dex_label(wallet_address)
+
+        return (
+            name
+            or str(
+                item.get("exchange_code") or item.get("provider") or "source"
+            ).strip()
+        )
+
     @staticmethod
     def _integration_id_from_service_key(service: str) -> int | None:
         raw = str(service)
@@ -1395,7 +1890,12 @@ class ScreenService:
             total = float(acc.get("total_usd", 0) or 0)
             if hide_small and total < settings.hide_small_balance_threshold:
                 continue
-            display = (name_map or {}).get(service) or self._display_name_for_service(service, {"dex_wallets": wallets}, include_total=False)
+            display = self._display_name_for_service(
+                service,
+                {"dex_wallets": wallets},
+                name_map=name_map,
+                include_total=False,
+            )
             rows.append((display, total))
         return [label for label, _ in rows]
 
@@ -1424,20 +1924,23 @@ class ScreenService:
     ) -> list[str]:
         sources: dict[str, tuple[str, float]] = {}
         spot = parsed.get("spot_exchanges") or {}
-        dex = parsed.get("dex_wallets") or {}
         for service, acc in spot.items():
-            sources[service] = (self._display_name_for_service(service, parsed, include_total=False), float(acc.get("total_usd", 0) or 0))
-        for service, acc in dex.items():
-            display = (name_map or {}).get(service) or self._display_name_for_service(service, parsed, include_total=False)
+            display = self._display_name_for_service(
+                service, parsed, name_map=name_map, include_total=False
+            )
             sources[service] = (display, float(acc.get("total_usd", 0) or 0))
         for item in integrations:
             if not isinstance(item, dict) or not bool(item.get("is_active")):
                 continue
+            if str(item.get("kind") or "").strip().lower() != "cex":
+                continue
             service = self._service_name_from_integration(item)
             if not service or service in sources:
                 continue
-            sources[service] = (self._integration_label(item), 0.0)
-        ordered = sorted(sources.items(), key=lambda item: (item[1][1], item[1][0]), reverse=True)
+            sources[service] = (self._display_name_for_integration(item), 0.0)
+        ordered = sorted(
+            sources.items(), key=lambda item: (item[1][1], item[1][0]), reverse=True
+        )
         return [label for _, (label, _) in ordered]
 
     def _transaction_source_services(
@@ -1447,19 +1950,23 @@ class ScreenService:
     ) -> list[str]:
         sources: dict[str, tuple[str, float]] = {}
         spot = parsed.get("spot_exchanges") or {}
-        dex = parsed.get("dex_wallets") or {}
         for service, acc in spot.items():
-            sources[service] = (self._display_name_for_service(service, parsed, include_total=False), float(acc.get("total_usd", 0) or 0))
-        for service, acc in dex.items():
-            sources[service] = (self._display_name_for_service(service, parsed, include_total=False), float(acc.get("total_usd", 0) or 0))
+            sources[service] = (
+                self._display_name_for_service(service, parsed, include_total=False),
+                float(acc.get("total_usd", 0) or 0),
+            )
         for item in integrations:
             if not isinstance(item, dict) or not bool(item.get("is_active")):
+                continue
+            if str(item.get("kind") or "").strip().lower() != "cex":
                 continue
             service = self._service_name_from_integration(item)
             if not service or service in sources:
                 continue
-            sources[service] = (self._integration_label(item), 0.0)
-        ordered = sorted(sources.items(), key=lambda item: (item[1][1], item[1][0]), reverse=True)
+            sources[service] = (self._display_name_for_integration(item), 0.0)
+        ordered = sorted(
+            sources.items(), key=lambda item: (item[1][1], item[1][0]), reverse=True
+        )
         return [service for service, _ in ordered]
 
     def _display_name_for_service(
@@ -1467,17 +1974,30 @@ class ScreenService:
         service: str,
         parsed: dict[str, Any],
         *,
+        name_map: dict[str, str] | None = None,
         include_total: bool = True,
     ) -> str:
+        resolved_name = (name_map or {}).get(service)
         if service in (parsed.get("spot_exchanges") or {}):
-            total = float((parsed.get("spot_exchanges") or {}).get(service, {}).get("total_usd", 0) or 0)
-            return f"{service}{': ' + msg.format_usd(total) if include_total else ''}"
-        if service in (parsed.get("dex_wallets") or {}):
-            total = float((parsed.get("dex_wallets") or {}).get(service, {}).get("total_usd", 0) or 0)
-            short = service.removeprefix("okx_wallet_")
-            label = f"Wallet {short}"
+            total = float(
+                (parsed.get("spot_exchanges") or {})
+                .get(service, {})
+                .get("total_usd", 0)
+                or 0
+            )
+            base = self._base_service_name(service)
+            label = resolved_name or self._default_cex_label(base)
             return f"{label}{': ' + msg.format_usd(total) if include_total else ''}"
-        return service
+        if service in (parsed.get("dex_wallets") or {}):
+            total = float(
+                (parsed.get("dex_wallets") or {}).get(service, {}).get("total_usd", 0)
+                or 0
+            )
+            label = resolved_name or self._default_dex_label(
+                self._wallet_address_from_service(service)
+            )
+            return f"{label}{': ' + msg.format_usd(total) if include_total else ''}"
+        return resolved_name or self._base_service_name(service)
 
     def _service_name_from_integration(self, item: dict[str, Any]) -> str:
         kind = str(item.get("kind") or "").strip().lower()
@@ -1488,26 +2008,34 @@ class ScreenService:
             return self._wallet_service_name(wallet_address)
         return ""
 
-    def _build_service_name_map(self, integrations: list[dict[str, Any]]) -> dict[str, str]:
-        """Map service key → integration.name for integrations that have a custom name set."""
+    def _build_service_name_map(
+        self, integrations: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        """Map service key to normalized display labels for integrations."""
         result: dict[str, str] = {}
         for item in integrations:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or "").strip()
-            if not name:
-                continue
             service = self._service_name_from_integration(item)
             if service:
-                result[service] = name
+                display_name = self._display_name_for_integration(item)
+                result[service] = display_name
+                integration_id = item.get("id")
+                if integration_id is not None:
+                    result[f"{service}#{integration_id}"] = display_name
         return result
 
     @staticmethod
     def _integration_label(item: dict[str, Any]) -> str:
-        name = str(item.get("name") or "").strip()
+        name = str(item.get("display_name") or item.get("name") or "").strip()
         if name:
             return name
-        service = str(item.get("exchange_code") or item.get("wallet_address") or item.get("provider") or "source").strip()
+        service = str(
+            item.get("exchange_code")
+            or item.get("wallet_address")
+            or item.get("provider")
+            or "source"
+        ).strip()
         return service
 
     @staticmethod

@@ -18,6 +18,7 @@ class AccountBalanceSchema(BaseModel):
 
 
 class ServiceBalanceSchema(BaseModel):
+    integration_id: int | None = None
     service: str
     accounts: list[AccountBalanceSchema] = Field(default_factory=list)
     assets: list[AssetSchema] = Field(
@@ -42,9 +43,12 @@ class RefreshResponse(BaseModel):
 
 
 class HistoryEntrySchema(BaseModel):
+    integration_id: int | None = None
     service: str
     total_usd: float
     assets: list[AssetSchema]
+    accounts: list[AccountBalanceSchema] = Field(default_factory=list)
+    actual: bool = True
     created_at: datetime
 
 
@@ -52,6 +56,22 @@ class HistoryResponse(BaseModel):
     service: Optional[str] = None
     entries: list[HistoryEntrySchema]
     total_entries: int
+
+
+class ChartPointSchema(BaseModel):
+    bucket_start: datetime
+    bucket_end: datetime
+    total_usd: float
+    actual: bool
+    point_type: str
+
+
+class HistoryChartResponse(BaseModel):
+    service: Optional[str] = None
+    interval: str
+    fill: str
+    order: str
+    points: list[ChartPointSchema]
 
 
 class ServiceHealthSchema(BaseModel):
@@ -75,6 +95,7 @@ class DashboardSummaryResponse(BaseModel):
     futures_total: float
     dex_total: float
     freshness: str
+    latest_updated_at: datetime | None = None
     plan: dict[str, Any]
     capabilities: dict[str, Any]
     throttling: dict[str, Any]
@@ -90,6 +111,7 @@ class TransactionSchema(BaseModel):
     """Схема транзакции (ввод/вывод)"""
 
     id: Optional[int] = None
+    integration_id: Optional[int] = None
     tx_id: str  # Уникальный ID транзакции на бирже
     service: str  # Биржа
     tx_type: str  # deposit или withdrawal
@@ -117,6 +139,7 @@ class TransactionListResponse(BaseModel):
     tx_type: Optional[str] = None  # deposit, withdrawal или None для всех
     transactions: list[TransactionSchema]
     total_count: int
+    refreshed_at: Optional[datetime] = None
 
 
 class TransactionsSummary(BaseModel):

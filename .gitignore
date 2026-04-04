@@ -44,5 +44,8 @@ env/
 .venv/
 
 api_keys.json
-data/*.db
-data/*.sqlite*
+data/
+nul
+tmp_okx*.js
+scripts/__pycache__/
+**/__pycache__/

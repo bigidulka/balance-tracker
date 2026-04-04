@@ -15,6 +15,11 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 import aiohttp
 import ccxt.pro as ccxtpro
 
+try:
+    from ccxt.base.errors import NotSupported as CCXTNotSupported
+except Exception:
+    CCXTNotSupported = Exception
+
 from app.core.config import get_settings
 from app.schemas.balance import (
     AssetSchema,
@@ -43,8 +48,6 @@ for logger_name in [
 ]:
     logging.getLogger(logger_name).setLevel(logging.CRITICAL)
     logging.getLogger(logger_name).propagate = False
-
-
 
 
 # Конфигурация типов счетов для каждой биржи
@@ -133,6 +136,96 @@ EXCHANGE_OPTIONS: dict[str, dict] = {
 # Биржи которые требуют прямого API запроса вместо CCXT
 DIRECT_API_EXCHANGES = {"bitmart"}
 
+RAW_BALANCE_STRATEGY_RAW = "raw"
+RAW_BALANCE_STRATEGY_LEGACY = "legacy"
+RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK = "raw_then_fallback"
+
+# Пер-биржевой маршрут для raw-path получения баланса.
+# Для бирж со специфичным парсингом в fetch_balance используем raw_then_fallback.
+RAW_BALANCE_STRATEGIES: dict[str, str] = {
+    "binance": RAW_BALANCE_STRATEGY_RAW,
+    "okx": RAW_BALANCE_STRATEGY_RAW,
+    "bybit": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "bitget": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "gateio": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "htx": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "kucoin": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "mexc": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "bitmart": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "poloniex": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "lbank": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "coinex": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "bingx": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+    "xt": RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK,
+}
+
+# Пер-биржевые кандидаты implicit методов (CCXT) для raw вызова.
+# Для некоторых бирж часть методов может отсутствовать; тогда сработает fallback.
+RAW_BALANCE_METHOD_CANDIDATES: dict[str, dict[str, list[str]]] = {
+    "bybit": {
+        "type=unified|subType=|settle=": ["privateGetV5AccountWalletBalance"],
+    },
+    "bitget": {
+        "type=spot|subType=|settle=": [
+            "privateGetSpotV1AccountAssets",
+            "privateGetSpotV2SpotAccountAssets",
+        ],
+        "type=margin|subType=|settle=": ["privateGetMarginV1CrossAccountAssets"],
+        "type=swap|subType=linear|settle=": ["privateGetMixV1AccountAccounts"],
+        "type=swap|subType=inverse|settle=": ["privateGetMixV1AccountAccounts"],
+    },
+    "gateio": {
+        "type=spot|subType=|settle=": ["privateGetSpotAccounts"],
+        "type=margin|subType=|settle=": ["privateGetMarginAccounts"],
+        "type=swap|subType=|settle=usdt": ["privateFuturesGetFuturesSettleAccounts"],
+    },
+    "htx": {
+        "type=__default__|subType=|settle=": ["privateGetAccountAccounts"],
+    },
+    "kucoin": {
+        "type=trade|subType=|settle=": ["privateGetAccounts"],
+        "type=main|subType=|settle=": ["privateGetAccounts"],
+    },
+    "mexc": {
+        "type=__default__|subType=|settle=": ["privateGetAccountInfo"],
+        "type=swap|subType=|settle=": ["privateGetApiV1PrivateAccountAssets"],
+    },
+    "bitmart": {
+        "type=spot|subType=|settle=": ["privateGetSpotV1Wallet"],
+        "type=margin|subType=|settle=": ["privateGetAccountSubAccountV1Wallet"],
+        "type=swap|subType=|settle=": ["privateGetContractPrivateAssetsDetail"],
+    },
+    "poloniex": {
+        "type=spot|subType=|settle=": ["privateGetAccountsBalances"],
+        "type=swap|subType=|settle=": ["privateGetV2Wallets"],
+    },
+    "lbank": {
+        "type=__default__|subType=|settle=": ["privatePostAssetInfo"],
+    },
+    "coinex": {
+        "type=spot|subType=|settle=": ["privateGetAssetsSpotBalance"],
+        "type=margin|subType=|settle=": ["privateGetAssetsMarginBalance"],
+        "type=swap|subType=|settle=": ["privateGetAssetsFuturesBalance"],
+    },
+    "bingx": {
+        "type=spot|subType=|settle=": ["privateGetOpenApiSpotV1AccountBalance"],
+        "type=swap|subType=|settle=": ["privateGetOpenApiSwapV2UserBalance"],
+    },
+    "xt": {
+        "type=spot|subType=|settle=": ["privateGetV4Balance"],
+        "type=swap|subType=|settle=": ["privateGetFutureUserV1Balance"],
+    },
+}
+
+_PROXY_RETRYABLE_ERRORS = (
+    aiohttp.ClientProxyConnectionError,
+    aiohttp.ClientHttpProxyError,
+    aiohttp.ServerDisconnectedError,
+    aiohttp.ServerConnectionError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
+
 T = TypeVar("T")
 
 
@@ -155,6 +248,7 @@ class CCXTManager:
         self._keyed_limiters_lock = asyncio.Lock()
         self._keyed_limiters_max_size = 1024
         self._keyed_limiters_idle_ttl_seconds = 15 * 60
+        self._balance_gateway_registry = None
 
     def _hash_value(self, raw: str) -> str:
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
@@ -167,22 +261,43 @@ class CCXTManager:
         api_key = settings.get_exchange_config(exchange_id).get("apiKey", "")
         return self._hash_value(api_key)
 
+    def _api_key_hash_from_config(self, config: dict[str, Any] | None) -> str:
+        if not config:
+            return "default"
+        return self._hash_value(str(config.get("apiKey") or "default"))
+
+    def _exchange_cache_key(
+        self,
+        exchange_id: str,
+        config_override: dict[str, Any] | None = None,
+    ) -> str:
+        if not config_override:
+            return exchange_id
+        return f"{exchange_id}#{self._api_key_hash_from_config(config_override)}"
+
     def _routing_signature(self, exchange_id: str) -> str:
-        return (
-            f"exchange:{exchange_id}:proxy:{self._proxy_hash()}:api:{self._api_key_hash(exchange_id)}"
-        )
+        return f"exchange:{exchange_id}:proxy:{self._proxy_hash()}:api:{self._api_key_hash(exchange_id)}"
 
     def _singleflight_key(self, operation: str, exchange_id: str, payload: dict) -> str:
         payload_hash = self._hash_value(
             json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         )
-        return f"{operation}:{self._routing_signature(exchange_id)}:payload:{payload_hash}"
+        return (
+            f"{operation}:{self._routing_signature(exchange_id)}:payload:{payload_hash}"
+        )
 
     def _since_bucket(self, since: Optional[datetime]) -> int | None:
         if since is None:
             return None
         bucket_size = max(1, settings.transactions_singleflight_since_bucket_seconds)
         return int(since.timestamp()) // bucket_size
+
+    def _get_balance_gateway_registry(self):
+        if self._balance_gateway_registry is None:
+            from app.services.exchange_rest import get_balance_gateway_registry
+
+            self._balance_gateway_registry = get_balance_gateway_registry(settings)
+        return self._balance_gateway_registry
 
     async def _singleflight(self, key: str, runner: Callable[[], Awaitable[T]]) -> T:
         if not settings.enable_ccxt_singleflight:
@@ -261,7 +376,9 @@ class CCXTManager:
             entry = self._keyed_limiters.get(key)
             if entry is None:
                 entry = _LimiterEntry(
-                    semaphore=asyncio.Semaphore(max(1, settings.ccxt_keyed_parallelism)),
+                    semaphore=asyncio.Semaphore(
+                        max(1, settings.ccxt_keyed_parallelism)
+                    ),
                     last_used=now,
                 )
                 self._keyed_limiters[key] = entry
@@ -332,12 +449,43 @@ class CCXTManager:
             "USDD",
         }
 
-    async def _fetch_bitmart_balance_direct(self) -> ServiceBalanceSchema:
+    async def _get_json_with_proxy_fallback(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+    ) -> Any:
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+
+        async def _request(proxy: str | None) -> Any:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers, proxy=proxy) as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+
+        if not settings.proxy_url:
+            return await _request(None)
+
+        try:
+            return await _request(settings.proxy_url)
+        except _PROXY_RETRYABLE_ERRORS as exc:
+            logger.warning(
+                "Proxy request failed for %s, retrying direct: %s",
+                url,
+                exc,
+            )
+            return await _request(None)
+
+    async def _fetch_bitmart_balance_direct(
+        self,
+        config_override: dict[str, Any] | None = None,
+    ) -> ServiceBalanceSchema:
         """Прямой запрос к BitMart API (обходит баг CCXT с currencies)"""
-        config = settings.get_exchange_config("bitmart")
+        config = config_override or settings.get_exchange_config("bitmart")
         api_key = config.get("apiKey")
         secret = config.get("secret")
-        memo = config.get("uid", "")
+        memo = config.get("uid") or config.get("password") or ""
 
         if not api_key or not secret:
             raise ValueError("No API key configured for bitmart")
@@ -358,17 +506,11 @@ class CCXTManager:
 
         url = "https://api-cloud.bitmart.com/spot/v1/wallet"
 
-        # Настройка прокси
-        proxy = settings.proxy_url if settings.proxy_url else None
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=headers,
-                proxy=proxy,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                data = await resp.json()
+        data = await self._get_json_with_proxy_fallback(
+            url,
+            headers=headers,
+            timeout_seconds=60,
+        )
 
         if data.get("code") != 1000:
             raise Exception(f"BitMart API error: {data.get('message', data)}")
@@ -387,8 +529,8 @@ class CCXTManager:
             }
             if memo:
                 exchange_config["uid"] = memo
-            if proxy:
-                exchange_config["aiohttp_proxy"] = proxy
+            if settings.proxy_url:
+                exchange_config["aiohttp_proxy"] = settings.proxy_url
 
             temp_exchange = ccxtpro.bitmart(exchange_config)
             try:
@@ -435,9 +577,7 @@ class CCXTManager:
         )
 
         degraded = (
-            has_non_stable_assets
-            and has_zero_valued_non_stable_assets
-            and not tickers
+            has_non_stable_assets and has_zero_valued_non_stable_assets and not tickers
         )
         if degraded:
             metrics_service.inc("ccxt_bitmart_ticker_degraded_total")
@@ -454,10 +594,15 @@ class CCXTManager:
             actual=not degraded,
         )
 
-    async def _get_exchange(self, exchange_id: str) -> ccxtpro.Exchange:
+    async def _get_exchange(
+        self,
+        exchange_id: str,
+        config_override: dict[str, Any] | None = None,
+    ) -> ccxtpro.Exchange:
         async with self._lock:
-            if exchange_id not in self._exchanges:
-                config = settings.get_exchange_config(exchange_id)
+            cache_key = self._exchange_cache_key(exchange_id, config_override)
+            if cache_key not in self._exchanges:
+                config = config_override or settings.get_exchange_config(exchange_id)
                 if not config.get("apiKey"):
                     raise ValueError(f"No API key configured for {exchange_id}")
 
@@ -492,9 +637,9 @@ class CCXTManager:
                         "https": settings.proxy_url,
                     }
 
-                self._exchanges[exchange_id] = exchange_class(exchange_config)
+                self._exchanges[cache_key] = exchange_class(exchange_config)
 
-            return self._exchanges[exchange_id]
+            return self._exchanges[cache_key]
 
     async def _get_tickers(self, exchange: ccxtpro.Exchange, exchange_id: str) -> dict:
         """Получает тикеры с кэшированием на 60 секунд"""
@@ -524,6 +669,193 @@ class CCXTManager:
         key = self._singleflight_key("tickers", exchange_id, {"ttl": 60})
         return await self._singleflight(key, _load_tickers)
 
+    def _raw_balance_route_key(self, params: dict) -> str:
+        request_params = dict(params)
+        balance_type = request_params.get("type", "__default__")
+        sub_type = request_params.get("subType", "")
+        settle = request_params.get("settle", "")
+        return f"type={balance_type}|subType={sub_type}|settle={settle}"
+
+    def _is_valid_balance_payload(self, balance: Any) -> bool:
+        return isinstance(balance, dict) and isinstance(balance.get("total", {}), dict)
+
+    async def _call_raw_implicit_method(
+        self,
+        exchange: ccxtpro.Exchange,
+        exchange_id: str,
+        operation: str,
+        method_name: str,
+        query: dict,
+    ) -> Any:
+        method = getattr(exchange, method_name)
+        return await self._run_exchange_call(
+            exchange_id,
+            operation,
+            lambda: method(query),
+        )
+
+    async def _fetch_account_balance_via_raw_implicit_generic(
+        self,
+        exchange: ccxtpro.Exchange,
+        exchange_id: str,
+        params: dict,
+    ) -> dict:
+        request_params = dict(params)
+        route_key = self._raw_balance_route_key(request_params)
+        candidates_by_route = RAW_BALANCE_METHOD_CANDIDATES.get(exchange_id, {})
+        candidate_methods = candidates_by_route.get(
+            route_key
+        ) or candidates_by_route.get("type=__default__|subType=|settle=", [])
+
+        if not candidate_methods:
+            raise ValueError(
+                f"Raw implicit balance route is not configured for {exchange_id}"
+            )
+
+        parse_params = dict(request_params)
+        parse_method = getattr(exchange, "parse_balance", None)
+        safe_method = getattr(exchange, "safe_balance", None)
+        if not callable(parse_method) or not callable(safe_method):
+            raise AttributeError(
+                f"Missing parse/safe balance methods for {exchange_id}"
+            )
+
+        last_error: Exception | None = None
+        for method_name in candidate_methods:
+            try:
+                response = await self._call_raw_implicit_method(
+                    exchange,
+                    exchange_id,
+                    f"raw_balance_{method_name}",
+                    method_name,
+                    request_params,
+                )
+                parsed = parse_method(response, parse_params)
+                balance = safe_method(parsed)
+                if not self._is_valid_balance_payload(balance):
+                    raise ValueError(
+                        f"Incompatible raw balance payload for {exchange_id}:{method_name}"
+                    )
+                return balance
+            except (AttributeError, ValueError) as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+
+        raise ValueError(f"Raw implicit balance call failed for {exchange_id}")
+
+    async def _fetch_account_balance_via_raw_ccxt(
+        self,
+        exchange: ccxtpro.Exchange,
+        exchange_id: str,
+        params: dict,
+    ) -> dict:
+        request_params = dict(params)
+
+        if exchange_id == "binance":
+            balance_type = request_params.get("type", "spot")
+            query = {k: v for k, v in request_params.items() if k != "type"}
+
+            if balance_type == "funding":
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_funding",
+                    lambda: exchange.sapiPostAssetGetFundingAsset(query),
+                )
+                parsed = exchange.parse_balance_custom(response, "funding")
+                balance = exchange.safe_balance(parsed)
+                if not self._is_valid_balance_payload(balance):
+                    raise ValueError(
+                        "Incompatible raw funding balance payload for binance"
+                    )
+                return balance
+
+            if balance_type == "margin":
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_margin",
+                    lambda: exchange.sapiGetMarginAccount(query),
+                )
+                parsed = exchange.parse_balance_custom(response, "margin")
+                balance = exchange.safe_balance(parsed)
+                if not self._is_valid_balance_payload(balance):
+                    raise ValueError(
+                        "Incompatible raw margin balance payload for binance"
+                    )
+                return balance
+
+            if balance_type in {"future", "swap", "linear"}:
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_linear",
+                    lambda: exchange.fapiPrivateV3GetAccount(query),
+                )
+                parsed = exchange.parse_balance_custom(response, "linear")
+                balance = exchange.safe_balance(parsed)
+                if not self._is_valid_balance_payload(balance):
+                    raise ValueError(
+                        "Incompatible raw linear balance payload for binance"
+                    )
+                return balance
+
+            if balance_type in {"delivery", "inverse"}:
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_inverse",
+                    lambda: exchange.dapiPrivateGetAccount(query),
+                )
+                parsed = exchange.parse_balance_custom(response, "inverse")
+                balance = exchange.safe_balance(parsed)
+                if not self._is_valid_balance_payload(balance):
+                    raise ValueError(
+                        "Incompatible raw inverse balance payload for binance"
+                    )
+                return balance
+
+            response = await self._run_exchange_call(
+                exchange_id,
+                "raw_balance_spot",
+                lambda: exchange.privateGetAccount(query),
+            )
+            parsed = exchange.parse_balance_custom(response, "spot")
+            balance = exchange.safe_balance(parsed)
+            if not self._is_valid_balance_payload(balance):
+                raise ValueError("Incompatible raw spot balance payload for binance")
+            return balance
+
+        if exchange_id == "okx":
+            balance_type = request_params.get("type", "trading")
+            query = {k: v for k, v in request_params.items() if k != "type"}
+
+            if balance_type == "funding":
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_funding",
+                    lambda: exchange.privateGetAssetBalances(query),
+                )
+            else:
+                response = await self._run_exchange_call(
+                    exchange_id,
+                    "raw_balance_trading",
+                    lambda: exchange.privateGetAccountBalance(query),
+                )
+
+            parsed = exchange.parse_balance_by_type(balance_type, response)
+            balance = exchange.safe_balance(parsed)
+            if not self._is_valid_balance_payload(balance):
+                raise ValueError("Incompatible raw balance payload for okx")
+            return balance
+
+        if exchange_id in EXCHANGE_ACCOUNT_TYPES:
+            return await self._fetch_account_balance_via_raw_implicit_generic(
+                exchange, exchange_id, request_params
+            )
+
+        raise ValueError(f"Raw balance path is not supported for {exchange_id}")
+
     async def _fetch_account_balance(
         self,
         exchange: ccxtpro.Exchange,
@@ -536,11 +868,58 @@ class CCXTManager:
         params = account_config.get("params", {})
 
         try:
-            balance = await self._run_exchange_call(
-                exchange_id,
-                "fetch_balance",
-                lambda: exchange.fetch_balance(params),
-            )
+            strategy = RAW_BALANCE_STRATEGY_LEGACY
+            if settings.enable_ccxt_raw_balance_path:
+                strategy = RAW_BALANCE_STRATEGIES.get(
+                    exchange_id, RAW_BALANCE_STRATEGY_LEGACY
+                )
+
+            balance: dict[str, Any]
+            if strategy == RAW_BALANCE_STRATEGY_RAW:
+                raw_started = perf_counter()
+                balance = await self._fetch_account_balance_via_raw_ccxt(
+                    exchange, exchange_id, params
+                )
+                metrics_service.observe_duration(
+                    "ccxt_balance_raw_duration_seconds", perf_counter() - raw_started
+                )
+                metrics_service.inc("ccxt_balance_path_raw_total")
+            elif strategy == RAW_BALANCE_STRATEGY_RAW_THEN_FALLBACK:
+                try:
+                    raw_started = perf_counter()
+                    balance = await self._fetch_account_balance_via_raw_ccxt(
+                        exchange, exchange_id, params
+                    )
+                    metrics_service.observe_duration(
+                        "ccxt_balance_raw_duration_seconds",
+                        perf_counter() - raw_started,
+                    )
+                    metrics_service.inc("ccxt_balance_path_raw_total")
+                except (CCXTNotSupported, AttributeError, ValueError):
+                    metrics_service.inc("ccxt_balance_path_fallback_total")
+                    legacy_started = perf_counter()
+                    balance = await self._run_exchange_call(
+                        exchange_id,
+                        "fetch_balance",
+                        lambda: exchange.fetch_balance(params),
+                    )
+                    metrics_service.observe_duration(
+                        "ccxt_balance_legacy_duration_seconds",
+                        perf_counter() - legacy_started,
+                    )
+                    metrics_service.inc("ccxt_balance_path_legacy_total")
+            else:
+                legacy_started = perf_counter()
+                balance = await self._run_exchange_call(
+                    exchange_id,
+                    "fetch_balance",
+                    lambda: exchange.fetch_balance(params),
+                )
+                metrics_service.observe_duration(
+                    "ccxt_balance_legacy_duration_seconds",
+                    perf_counter() - legacy_started,
+                )
+                metrics_service.inc("ccxt_balance_path_legacy_total")
 
             assets: list[AssetSchema] = []
             total_usd = 0.0
@@ -585,7 +964,30 @@ class CCXTManager:
                 logger.warning(f"{exchange_id} {account_type} error: {e}")
             return None
 
-    async def fetch_balance(self, exchange_id: str) -> ServiceBalanceSchema:
+    async def fetch_balance(
+        self,
+        exchange_id: str,
+        config_override: dict[str, Any] | None = None,
+    ) -> ServiceBalanceSchema:
+        account_types = EXCHANGE_ACCOUNT_TYPES.get(
+            exchange_id, [{"type": "spot", "params": {}}]
+        )
+
+        async def _fetch_balance_impl() -> ServiceBalanceSchema:
+            gateway = self._get_balance_gateway_registry().resolve(exchange_id)
+            return await gateway.fetch_balance(
+                exchange_id,
+                self,
+                config_override=config_override,
+            )
+
+        return await _fetch_balance_impl()
+
+    async def _fetch_balance_via_ccxt(
+        self,
+        exchange_id: str,
+        config_override: dict[str, Any] | None = None,
+    ) -> ServiceBalanceSchema:
         """Получает балансы со всех типов счетов биржи"""
 
         account_types = EXCHANGE_ACCOUNT_TYPES.get(
@@ -596,6 +998,7 @@ class CCXTManager:
             exchange_id,
             {
                 "account_types": account_types,
+                "api": self._api_key_hash_from_config(config_override),
             },
         )
 
@@ -604,10 +1007,15 @@ class CCXTManager:
                 return await self._run_exchange_call(
                     exchange_id,
                     "bitmart_direct_balance",
-                    self._fetch_bitmart_balance_direct,
+                    lambda: self._fetch_bitmart_balance_direct(
+                        config_override=config_override,
+                    ),
                 )
 
-            exchange = await self._get_exchange(exchange_id)
+            exchange = await self._get_exchange(
+                exchange_id,
+                config_override=config_override,
+            )
 
             try:
                 tickers = await self._get_tickers(exchange, exchange_id)
@@ -621,7 +1029,9 @@ class CCXTManager:
                     "futures": 0.0,
                 }
 
-                inter_account_delay = max(0.0, settings.ccxt_inter_account_delay_seconds)
+                inter_account_delay = max(
+                    0.0, settings.ccxt_inter_account_delay_seconds
+                )
                 for index, acc_config in enumerate(account_types):
                     result = await self._fetch_account_balance(
                         exchange, exchange_id, acc_config, tickers
@@ -677,7 +1087,7 @@ class CCXTManager:
                     assets=list(all_assets.values()),
                     total_usd=total_usd,
                     updated_at=datetime.now(timezone.utc),
-                    actual=True,
+                    actual=bool(accounts or all_assets or total_usd > 0),
                 )
 
             except Exception as e:
@@ -686,7 +1096,7 @@ class CCXTManager:
 
         return await self._singleflight(key, _fetch_balance_impl)
 
-    async def _calculate_usd_value(
+    def calculate_usd_value_sync(
         self, coin: str, amount: float, tickers: dict
     ) -> float:
         """Рассчитывает USD стоимость монеты"""
@@ -736,6 +1146,11 @@ class CCXTManager:
                     return amount * float(price)
 
         return 0.0
+
+    async def _calculate_usd_value(
+        self, coin: str, amount: float, tickers: dict
+    ) -> float:
+        return self.calculate_usd_value_sync(coin, amount, tickers)
 
     async def fetch_all_balances(
         self, exchange_ids: Optional[list[str]] = None
@@ -833,11 +1248,17 @@ class CCXTManager:
         )
 
     async def fetch_deposits(
-        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
+        self,
+        exchange_id: str,
+        since: Optional[datetime] = None,
+        limit: int = 50,
+        config_override: dict[str, Any] | None = None,
     ) -> list[TransactionSchema]:
         """Получает историю вводов (deposits) для биржи"""
 
-        exchange = await self._get_exchange(exchange_id)
+        exchange = await self._get_exchange(
+            exchange_id, config_override=config_override
+        )
 
         # Проверяем поддержку метода
         if not exchange.has.get("fetchDeposits"):
@@ -851,7 +1272,9 @@ class CCXTManager:
                 exchange_id,
                 "fetch_deposits",
                 lambda: exchange.fetch_deposits(
-                    code=None, since=since_ts, limit=limit  # Все валюты
+                    code=None,
+                    since=since_ts,
+                    limit=limit,  # Все валюты
                 ),
             )
 
@@ -881,11 +1304,17 @@ class CCXTManager:
             return []
 
     async def fetch_withdrawals(
-        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
+        self,
+        exchange_id: str,
+        since: Optional[datetime] = None,
+        limit: int = 50,
+        config_override: dict[str, Any] | None = None,
     ) -> list[TransactionSchema]:
         """Получает историю выводов (withdrawals) для биржи"""
 
-        exchange = await self._get_exchange(exchange_id)
+        exchange = await self._get_exchange(
+            exchange_id, config_override=config_override
+        )
 
         # Проверяем поддержку метода
         if not exchange.has.get("fetchWithdrawals"):
@@ -899,7 +1328,9 @@ class CCXTManager:
                 exchange_id,
                 "fetch_withdrawals",
                 lambda: exchange.fetch_withdrawals(
-                    code=None, since=since_ts, limit=limit  # Все валюты
+                    code=None,
+                    since=since_ts,
+                    limit=limit,  # Все валюты
                 ),
             )
 
@@ -929,7 +1360,11 @@ class CCXTManager:
             return []
 
     async def fetch_all_transactions(
-        self, exchange_id: str, since: Optional[datetime] = None, limit: int = 50
+        self,
+        exchange_id: str,
+        since: Optional[datetime] = None,
+        limit: int = 50,
+        config_override: dict[str, Any] | None = None,
     ) -> list[TransactionSchema]:
         """Получает все транзакции (deposits + withdrawals) для биржи"""
 
@@ -939,17 +1374,30 @@ class CCXTManager:
             {
                 "since_bucket": self._since_bucket(since),
                 "limit": limit,
+                "api": self._api_key_hash_from_config(config_override),
             },
         )
 
         async def _fetch_transactions_impl() -> list[TransactionSchema]:
-            deposits = await self.fetch_deposits(exchange_id, since, limit)
-            withdrawals = await self.fetch_withdrawals(exchange_id, since, limit)
+            deposits = await self.fetch_deposits(
+                exchange_id,
+                since,
+                limit,
+                config_override=config_override,
+            )
+            withdrawals = await self.fetch_withdrawals(
+                exchange_id,
+                since,
+                limit,
+                config_override=config_override,
+            )
 
             all_transactions = deposits + withdrawals
 
             all_transactions.sort(
-                key=lambda x: x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc),
+                key=lambda x: (
+                    x.tx_timestamp or datetime.min.replace(tzinfo=timezone.utc)
+                ),
                 reverse=True,
             )
             return all_transactions
@@ -987,7 +1435,9 @@ class CCXTManager:
                     logger.error(f"Timeout fetching transactions from {exchange_id}")
                     return exchange_id, TimeoutError(f"Timeout for {exchange_id}")
                 except Exception as exc:
-                    logger.error(f"Failed to fetch transactions from {exchange_id}: {exc}")
+                    logger.error(
+                        f"Failed to fetch transactions from {exchange_id}: {exc}"
+                    )
                     return exchange_id, exc
 
         fetch_tasks = [_fetch_one(exchange_id) for exchange_id in exchange_ids]
@@ -997,6 +1447,69 @@ class CCXTManager:
             results[exchange_id] = result
 
         return results
+
+    async def verify_credentials(
+        self,
+        exchange_id: str,
+        api_key: str,
+        api_secret: str,
+        api_password: str | None = None,
+        api_uid: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """Verify exchange API credentials by attempting fetch_balance.
+
+        Returns (True, None) on success or (False, error_message) on failure.
+        Uses a temporary (non-cached) exchange instance that is closed after the check.
+        """
+        exchange_class = getattr(ccxtpro, exchange_id, None)
+        if exchange_class is None:
+            return False, f"Exchange {exchange_id} is not supported"
+
+        exchange_config: dict[str, Any] = {
+            "apiKey": api_key,
+            "secret": api_secret,
+            "enableRateLimit": True,
+            "timeout": 15_000,
+            "verbose": False,
+            "options": {
+                "defaultType": "spot",
+                "adjustForTimeDifference": True,
+                **EXCHANGE_OPTIONS.get(exchange_id, {}),
+            },
+        }
+        if api_password:
+            exchange_config["password"] = api_password
+        if api_uid:
+            exchange_config["uid"] = api_uid
+        if settings.proxy_url:
+            exchange_config["aiohttp_proxy"] = settings.proxy_url
+            exchange_config["proxies"] = {
+                "http": settings.proxy_url,
+                "https": settings.proxy_url,
+            }
+
+        exchange = exchange_class(exchange_config)
+        try:
+            await exchange.fetch_balance({"type": "spot"})
+            return True, None
+        except ccxtpro.AuthenticationError as exc:
+            return False, f"Authentication failed: {exc}"
+        except ccxtpro.PermissionDenied as exc:
+            return False, f"Permission denied: {exc}"
+        except ccxtpro.ExchangeNotAvailable as exc:
+            return False, f"Exchange unavailable: {exc}"
+        except ccxtpro.NetworkError as exc:
+            return False, f"Network error: {exc}"
+        except Exception as exc:
+            msg = str(exc)
+            if "auth" in msg.lower() or "key" in msg.lower() or "sign" in msg.lower():
+                return False, f"Authentication failed: {exc}"
+            return False, f"Verification failed: {exc}"
+        finally:
+            try:
+                await exchange.close()
+            except Exception:
+                pass
 
     async def close_all(self):
         """Закрывает все соединения"""

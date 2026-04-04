@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.schemas.balance import (
 )
 from app.services.ccxt_manager import ccxt_manager
 from app.services.entitlements_service import EntitlementsService
+from app.services.integration_service import IntegrationService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,10 +33,52 @@ class TransactionService:
         self.tx_repo = TransactionRepository(session)
         self.status_repo = ServiceStatusRepository(session)
         self.entitlements = EntitlementsService(session)
+        self.integration_service = IntegrationService(session)
+
+    async def _load_active_exchange_targets(self) -> list[dict[str, Any]]:
+        integrations = await self.integration_service.list_integrations(
+            self.organization_id,
+            include_inactive=False,
+        )
+        targets: list[dict[str, Any]] = []
+        for integration in integrations:
+            if str(integration.kind or "").strip().lower() != "cex":
+                continue
+            exchange_code = str(integration.exchange_code or "").strip().lower()
+            if not exchange_code:
+                continue
+            targets.append(
+                {
+                    "integration_id": integration.id,
+                    "service": exchange_code,
+                    "exchange_id": exchange_code,
+                }
+            )
+        return targets
+
+    async def _load_cex_config_override(self, integration_id: int) -> dict[str, Any] | None:
+        secrets = await self.integration_service.get_integration_secrets(
+            self.organization_id,
+            integration_id,
+        )
+        api_key = str(secrets.get("api_key") or "").strip()
+        api_secret = str(secrets.get("api_secret") or "").strip()
+        if not api_key or not api_secret:
+            return None
+        config = {
+            "apiKey": api_key,
+            "secret": api_secret,
+        }
+        if secrets.get("api_password"):
+            config["password"] = str(secrets["api_password"])
+        if secrets.get("api_uid"):
+            config["uid"] = str(secrets["api_uid"])
+        return config
 
     async def get_transactions(
         self,
         service: Optional[str] = None,
+        integration_id: Optional[int] = None,
         tx_type: Optional[str] = None,
         status: Optional[str] = None,
         start_date: Optional[datetime] = None,
@@ -48,6 +91,7 @@ class TransactionService:
         transactions = await self.tx_repo.get_transactions(
             organization_id=self.organization_id,
             service=service,
+            integration_id=integration_id,
             tx_type=tx_type,
             status=status,
             start_date=start_date,
@@ -59,6 +103,7 @@ class TransactionService:
         total_count = await self.tx_repo.get_transaction_count(
             organization_id=self.organization_id,
             service=service,
+            integration_id=integration_id,
             tx_type=tx_type,
             status=status,
             start_date=start_date,
@@ -68,6 +113,7 @@ class TransactionService:
         tx_schemas = [
             TransactionSchema(
                 id=tx.id,
+                integration_id=tx.integration_id,
                 tx_id=tx.tx_id,
                 service=tx.service,
                 tx_type=tx.tx_type,
@@ -95,6 +141,7 @@ class TransactionService:
             tx_type=tx_type,
             transactions=tx_schemas,
             total_count=total_count,
+            refreshed_at=datetime.now(timezone.utc),
         )
 
     async def get_service_summary(self, service: str) -> TransactionsSummary:
@@ -147,11 +194,24 @@ class TransactionService:
 
         await self.entitlements.ensure_refresh_interval_for_organization(self.organization_id)
 
-        if exchange_ids is None:
-            exchange_ids = settings.get_active_exchanges()
+        targets = await self._load_active_exchange_targets()
+        if exchange_ids is not None:
+            targets = [target for target in targets if target["exchange_id"] in exchange_ids]
 
-        exchange_ids = sorted(exchange_ids)
-        inflight_key = f"org:{self.organization_id}:since:{since_hours}:exchanges:{','.join(exchange_ids)}"
+        if not targets:
+            return TransactionsRefreshResponse(
+                status="ok",
+                message="No active exchange integrations to refresh",
+                new_transactions=0,
+                updated_transactions=0,
+                services_checked=[],
+                failed_services=[],
+            )
+
+        target_keys = sorted(
+            f"{target['exchange_id']}:{target['integration_id']}" for target in targets
+        )
+        inflight_key = f"org:{self.organization_id}:since:{since_hours}:targets:{','.join(target_keys)}"
 
         async def _refresh_impl() -> TransactionsRefreshResponse:
             since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
@@ -161,11 +221,20 @@ class TransactionService:
             checked_services = []
             failed_services = []
 
-            results = await ccxt_manager.fetch_transactions_all_exchanges(
-                exchange_ids=exchange_ids, since=since, limit=100
-            )
+            for target in targets:
+                exchange_id = str(target["exchange_id"])
+                integration_id = int(target["integration_id"])
+                try:
+                    config_override = await self._load_cex_config_override(integration_id)
+                    result = await ccxt_manager.fetch_all_transactions(
+                        exchange_id,
+                        since=since,
+                        limit=100,
+                        config_override=config_override,
+                    )
+                except Exception as fetch_exc:
+                    result = fetch_exc
 
-            for exchange_id, result in results.items():
                 if isinstance(result, Exception):
                     logger.warning(
                         f"Failed to fetch transactions from {exchange_id}: {result}"
@@ -174,10 +243,15 @@ class TransactionService:
                     continue
 
                 checked_services.append(exchange_id)
+                scoped_transactions = [
+                    tx.model_copy(update={"integration_id": integration_id})
+                    for tx in result
+                ]
 
                 try:
                     exchange_new, exchange_updated = await self.tx_repo.save_transactions_batch(
-                        result, organization_id=self.organization_id
+                        scoped_transactions,
+                        organization_id=self.organization_id,
                     )
                     new_count += exchange_new
                     updated_count += exchange_updated
@@ -185,7 +259,7 @@ class TransactionService:
                     logger.error(
                         f"Failed to save transactions batch for {exchange_id}: {e}"
                     )
-                    for tx_data in result:
+                    for tx_data in scoped_transactions:
                         try:
                             _, is_new = await self.tx_repo.save_transaction(
                                 tx_data, organization_id=self.organization_id
@@ -242,6 +316,7 @@ class TransactionService:
         return [
             TransactionSchema(
                 id=tx.id,
+                integration_id=tx.integration_id,
                 tx_id=tx.tx_id,
                 service=tx.service,
                 tx_type=tx.tx_type,

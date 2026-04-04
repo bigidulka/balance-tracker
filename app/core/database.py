@@ -1,5 +1,9 @@
 import logging
 import os
+from pathlib import Path
+import subprocess
+import sys
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -39,6 +43,15 @@ if not is_sqlite:
 
 engine = create_async_engine(database_url, **engine_kwargs)
 
+if is_sqlite:
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_enable_fk(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 async_session_maker = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -64,4 +77,34 @@ async def init_db():
             await conn.run_sync(Base.metadata.create_all)
         return
 
-    logger.info("Skipping metadata.create_all for PostgreSQL; use Alembic migrations")
+    logger.info("Running Alembic migrations for PostgreSQL")
+    migration_lock_id = 248731
+
+    def _run_migrations() -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        env = dict(os.environ)
+        env["DATABASE_URL"] = database_url
+        env["DATABASE_USE_SQLITE"] = "false"
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                str(project_root / "alembic.ini"),
+                "upgrade",
+                "head",
+            ],
+            cwd=project_root,
+            env=env,
+            check=True,
+        )
+
+    import asyncio
+
+    async with engine.connect() as conn:
+        await conn.execute(text(f"SELECT pg_advisory_lock({migration_lock_id})"))
+        try:
+            await asyncio.to_thread(_run_migrations)
+        finally:
+            await conn.execute(text(f"SELECT pg_advisory_unlock({migration_lock_id})"))

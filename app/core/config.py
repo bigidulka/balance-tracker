@@ -83,10 +83,16 @@ class Settings(BaseSettings):
     okx_wallet_account_ids: str = Field(
         default='["6555B26D-2FEC-4CBD-AB1A-E410BB9D400D"]'
     )
+    okx_wallet_addresses: str = Field(default="[]")
+    okx_wallet_legacy_enabled: bool = Field(default=False)
+    debank_sdk_base_url: str = Field(default="http://debank-sdk:8080")
+    debank_sdk_timeout_seconds: int = Field(default=30)
 
     balance_cache_ttl: int = Field(default=60)
     balance_cache_hard_ttl: int = Field(default=120)
     request_timeout: int = Field(default=30)
+    exchange_default_transport: str = Field(default="ccxt")
+    exchange_transport_overrides: str = Field(default="{}")
     ccxt_balance_call_timeout_seconds: float = Field(default=30.0)
     ccxt_inter_account_delay_seconds: float = Field(default=0.0)
     ccxt_inter_exchange_delay_seconds: float = Field(default=0.0)
@@ -101,10 +107,12 @@ class Settings(BaseSettings):
     enable_ccxt_singleflight: bool = Field(default=False)
     enable_ccxt_stale_revalidate: bool = Field(default=False)
     enable_ccxt_keyed_backpressure: bool = Field(default=False)
+    enable_ccxt_raw_balance_path: bool = Field(default=False)
     enable_syncjob_dedupe: bool = Field(default=False)
     enable_shared_cache_l2: bool = Field(default=False)
     exchange_parallelism: int = Field(default=8)
     job_parallelism: int = Field(default=2)
+    background_refresh_poll_interval_seconds: float = Field(default=5.0)
 
     # Legacy aliases kept for backward compatibility during rollout.
     enable_legacy_background_refresh_loop: Optional[bool] = Field(default=None)
@@ -114,6 +122,12 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(default="dev-change-me")
     jwt_algorithm: str = Field(default="HS256")
     jwt_access_token_expire_minutes: int = Field(default=60 * 24)
+    api_token: str = Field(default="")
+    telegram_admin_user_id: int = Field(default=6238100241)
+    crypto_bot_api_token: str = Field(default="")
+    crypto_bot_api_base_url: str = Field(default="https://pay.crypt.bot/api")
+    crypto_bot_invoice_asset: str = Field(default="USDT")
+    crypto_bot_webhook_secret: str = Field(default="")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -156,12 +170,43 @@ class Settings(BaseSettings):
             return []
 
     @property
+    def okx_wallet_address_list(self) -> list[str]:
+        try:
+            values = json.loads(self.okx_wallet_addresses)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return [value for value in values if isinstance(value, str) and value.strip()]
+
+    @property
+    def okx_wallet_targets(self) -> list[str]:
+        addresses = self.okx_wallet_address_list
+        if addresses:
+            return addresses
+        if self.okx_wallet_legacy_enabled:
+            return self.okx_wallet_accounts
+        return []
+
+    @property
     def cors_origins(self) -> list[str]:
         try:
             origins = json.loads(self.cors_allow_origins)
             return [o for o in origins if isinstance(o, str)]
         except (json.JSONDecodeError, TypeError):
             return []
+
+    @property
+    def exchange_transport_overrides_map(self) -> dict[str, str]:
+        try:
+            raw = json.loads(self.exchange_transport_overrides)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for key, value in raw.items():
+            if isinstance(key, str) and isinstance(value, str):
+                normalized[key.lower()] = value.lower()
+        return normalized
 
     def get_exchange_config(self, exchange_id: str) -> dict:
         configs = {
@@ -230,6 +275,7 @@ class Settings(BaseSettings):
 
     def get_active_exchanges(self) -> list[str]:
         exchanges = []
+        overrides = self.exchange_transport_overrides_map
         exchange_keys = {
             "binance": self.binance_api_key,
             "bitget": self.bitget_api_key,
@@ -247,9 +293,23 @@ class Settings(BaseSettings):
             "xt": self.xt_api_key,
         }
         for exchange_id, api_key in exchange_keys.items():
+            if overrides.get(exchange_id) == "disabled":
+                continue
             if api_key:
                 exchanges.append(exchange_id)
         return exchanges
+
+    def is_service_enabled(self, service_name: str) -> bool:
+        normalized = (service_name or "").lower()
+        overrides = self.exchange_transport_overrides_map
+        if normalized == "okx_wallet" or normalized.startswith("okx_wallet_"):
+            return overrides.get("okx_wallet") != "disabled"
+        for exchange_id, transport in overrides.items():
+            if transport != "disabled":
+                continue
+            if normalized == exchange_id or normalized.startswith(f"{exchange_id}_"):
+                return False
+        return True
 
 
 @lru_cache

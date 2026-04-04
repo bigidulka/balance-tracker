@@ -27,19 +27,18 @@ class BalanceRepository:
         self.session = session
 
     async def get_latest_balance(
-        self, service: str, organization_id: int = DEFAULT_ORGANIZATION_ID
+        self,
+        service: str,
+        organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
     ) -> Optional[Balance]:
-        query = (
-            select(Balance)
-            .where(
-                and_(
-                    Balance.organization_id == organization_id,
-                    Balance.service == service,
-                )
-            )
-            .order_by(desc(Balance.updated_at), desc(Balance.id))
-            .limit(1)
-        )
+        predicates = [
+            Balance.organization_id == organization_id,
+            Balance.service == service,
+        ]
+        if integration_id is not None:
+            predicates.append(Balance.integration_id == integration_id)
+        query = select(Balance).where(and_(*predicates)).order_by(desc(Balance.updated_at), desc(Balance.id)).limit(1)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
@@ -51,7 +50,7 @@ class BalanceRepository:
                 Balance.id.label("id"),
                 func.row_number()
                 .over(
-                    partition_by=Balance.service,
+                    partition_by=(func.coalesce(Balance.integration_id, -1), Balance.service),
                     order_by=(Balance.updated_at.desc(), Balance.id.desc()),
                 )
                 .label("rn"),
@@ -78,11 +77,38 @@ class BalanceRepository:
         actual: bool = True,
         accounts: Optional[list[AccountBalanceSchema]] = None,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
     ) -> Balance:
-        existing = await self.get_latest_balance(service, organization_id)
+        existing = await self.get_latest_balance(
+            service,
+            organization_id,
+            integration_id=integration_id,
+        )
 
         assets_data = [asset.model_dump() for asset in assets]
         accounts_data = [acc.model_dump() for acc in accounts] if accounts else []
+
+        def _normalized_accounts(rows: list[dict]) -> tuple:
+            normalized: list[tuple] = []
+            for row in rows:
+                assets_key = tuple(
+                    sorted(
+                        (
+                            str(asset.get("coin") or ""),
+                            round(float(asset.get("amount", 0) or 0), 8),
+                            round(float(asset.get("value_usd", 0) or 0), 8),
+                        )
+                        for asset in (row.get("assets") or [])
+                    )
+                )
+                normalized.append(
+                    (
+                        str(row.get("account_type") or "spot"),
+                        round(float(row.get("total_usd", 0) or 0), 8),
+                        assets_key,
+                    )
+                )
+            return tuple(sorted(normalized))
 
         if existing:
             existing_total = existing.total_usd
@@ -96,26 +122,27 @@ class BalanceRepository:
                 new_assets_set = {(a["coin"], round(a["amount"], 8)) for a in assets_data}
                 has_changed = existing_assets_set != new_assets_set
 
+            if not has_changed:
+                has_changed = _normalized_accounts(existing.accounts or []) != _normalized_accounts(
+                    accounts_data
+                )
+
             if has_changed:
-                if total_usd > 0 or (total_usd == 0 and existing_total == 0):
-                    history = BalanceHistory(
-                        organization_id=organization_id,
-                        service=service,
-                        assets=assets_data,
-                        accounts=accounts_data,
-                        total_usd=total_usd,
-                    )
-                    self.session.add(history)
+                history = BalanceHistory(
+                    organization_id=organization_id,
+                    integration_id=integration_id,
+                    service=service,
+                    assets=assets_data,
+                    accounts=accounts_data,
+                    total_usd=total_usd,
+                    actual=actual,
+                )
+                self.session.add(history)
 
-                    existing.assets = assets_data
-                    existing.accounts = accounts_data
-                    existing.total_usd = total_usd
-                    existing.actual = actual
-                    existing.updated_at = datetime.now(timezone.utc)
-                    await self.session.commit()
-                    return existing
-
-                existing.actual = False
+                existing.assets = assets_data
+                existing.accounts = accounts_data
+                existing.total_usd = total_usd
+                existing.actual = actual
                 existing.updated_at = datetime.now(timezone.utc)
                 await self.session.commit()
                 return existing
@@ -129,6 +156,7 @@ class BalanceRepository:
         now = datetime.now(timezone.utc)
         balance = Balance(
             organization_id=organization_id,
+            integration_id=integration_id,
             service=service,
             assets=assets_data,
             accounts=accounts_data,
@@ -140,10 +168,12 @@ class BalanceRepository:
 
         history = BalanceHistory(
             organization_id=organization_id,
+            integration_id=integration_id,
             service=service,
             assets=assets_data,
             accounts=accounts_data,
             total_usd=total_usd,
+            actual=actual,
             created_at=now,
         )
         self.session.add(history)
@@ -152,9 +182,16 @@ class BalanceRepository:
         return balance
 
     async def mark_as_stale(
-        self, service: str, organization_id: int = DEFAULT_ORGANIZATION_ID
+        self,
+        service: str,
+        organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
     ) -> Optional[Balance]:
-        balance = await self.get_latest_balance(service, organization_id)
+        balance = await self.get_latest_balance(
+            service,
+            organization_id,
+            integration_id=integration_id,
+        )
         if balance:
             balance.actual = False
             balance.updated_at = datetime.now(timezone.utc)
@@ -165,9 +202,11 @@ class BalanceRepository:
         self,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
         service: Optional[str] = None,
+        integration_id: int | None = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         limit: int = 100,
+        order: str = "desc",
     ) -> list[BalanceHistory]:
         query = select(BalanceHistory).where(
             BalanceHistory.organization_id == organization_id
@@ -175,13 +214,44 @@ class BalanceRepository:
 
         if service:
             query = query.where(BalanceHistory.service == service)
+        if integration_id is not None:
+            query = query.where(BalanceHistory.integration_id == integration_id)
         if start_date:
             query = query.where(BalanceHistory.created_at >= start_date)
         if end_date:
             query = query.where(BalanceHistory.created_at <= end_date)
 
-        query = query.order_by(desc(BalanceHistory.created_at)).limit(limit)
+        if order == "asc":
+            query = query.order_by(BalanceHistory.created_at.asc())
+        else:
+            query = query.order_by(desc(BalanceHistory.created_at))
+        query = query.limit(limit)
 
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_history_points(
+        self,
+        organization_id: int = DEFAULT_ORGANIZATION_ID,
+        service: Optional[str] = None,
+        integration_id: int | None = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> list[BalanceHistory]:
+        query = select(BalanceHistory).where(
+            BalanceHistory.organization_id == organization_id
+        )
+
+        if service:
+            query = query.where(BalanceHistory.service == service)
+        if integration_id is not None:
+            query = query.where(BalanceHistory.integration_id == integration_id)
+        if start_date:
+            query = query.where(BalanceHistory.created_at >= start_date)
+        if end_date:
+            query = query.where(BalanceHistory.created_at <= end_date)
+
+        query = query.order_by(BalanceHistory.created_at.asc(), BalanceHistory.id.asc())
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -189,6 +259,7 @@ class BalanceRepository:
         self,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
         service: Optional[str] = None,
+        integration_id: int | None = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
     ) -> int:
@@ -200,6 +271,8 @@ class BalanceRepository:
 
         if service:
             query = query.where(BalanceHistory.service == service)
+        if integration_id is not None:
+            query = query.where(BalanceHistory.integration_id == integration_id)
         if start_date:
             query = query.where(BalanceHistory.created_at >= start_date)
         if end_date:
@@ -271,14 +344,16 @@ class TransactionRepository:
         service: str,
         tx_id: str,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
     ) -> Optional[Transaction]:
-        query = select(Transaction).where(
-            and_(
-                Transaction.organization_id == organization_id,
-                Transaction.service == service,
-                Transaction.tx_id == tx_id,
-            )
-        )
+        predicates = [
+            Transaction.organization_id == organization_id,
+            Transaction.service == service,
+            Transaction.tx_id == tx_id,
+        ]
+        if integration_id is not None:
+            predicates.append(Transaction.integration_id == integration_id)
+        query = select(Transaction).where(and_(*predicates))
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
@@ -286,6 +361,7 @@ class TransactionRepository:
         self,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
         service: Optional[str] = None,
+        integration_id: int | None = None,
         tx_type: Optional[str] = None,
         status: Optional[str] = None,
         start_date: Optional[datetime] = None,
@@ -297,6 +373,8 @@ class TransactionRepository:
 
         if service:
             query = query.where(Transaction.service == service)
+        if integration_id is not None:
+            query = query.where(Transaction.integration_id == integration_id)
         if tx_type:
             query = query.where(Transaction.tx_type == tx_type)
         if status:
@@ -315,6 +393,7 @@ class TransactionRepository:
         self,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
         service: Optional[str] = None,
+        integration_id: int | None = None,
         tx_type: Optional[str] = None,
         status: Optional[str] = None,
         start_date: Optional[datetime] = None,
@@ -328,6 +407,8 @@ class TransactionRepository:
 
         if service:
             query = query.where(Transaction.service == service)
+        if integration_id is not None:
+            query = query.where(Transaction.integration_id == integration_id)
         if tx_type:
             query = query.where(Transaction.tx_type == tx_type)
         if status:
@@ -403,7 +484,10 @@ class TransactionRepository:
         organization_id: int = DEFAULT_ORGANIZATION_ID,
     ) -> tuple[Transaction, bool]:
         existing = await self.get_by_tx_id(
-            tx_data.service, tx_data.tx_id, organization_id=organization_id
+            tx_data.service,
+            tx_data.tx_id,
+            organization_id=organization_id,
+            integration_id=tx_data.integration_id,
         )
 
         if existing:
@@ -414,6 +498,7 @@ class TransactionRepository:
 
         transaction = Transaction(
             organization_id=organization_id,
+            integration_id=tx_data.integration_id,
             tx_id=tx_data.tx_id,
             service=tx_data.service,
             tx_type=tx_data.tx_type,
@@ -439,7 +524,10 @@ class TransactionRepository:
         except IntegrityError:
             await self.session.rollback()
             existing_after_conflict = await self.get_by_tx_id(
-                tx_data.service, tx_data.tx_id, organization_id=organization_id
+                tx_data.service,
+                tx_data.tx_id,
+                organization_id=organization_id,
+                integration_id=tx_data.integration_id,
             )
             if existing_after_conflict is None:
                 raise
@@ -455,7 +543,10 @@ class TransactionRepository:
 
         for tx_data in transactions:
             existing = await self.get_by_tx_id(
-                tx_data.service, tx_data.tx_id, organization_id=organization_id
+                tx_data.service,
+                tx_data.tx_id,
+                organization_id=organization_id,
+                integration_id=tx_data.integration_id,
             )
 
             if existing:
@@ -465,6 +556,7 @@ class TransactionRepository:
 
             transaction = Transaction(
                 organization_id=organization_id,
+                integration_id=tx_data.integration_id,
                 tx_id=tx_data.tx_id,
                 service=tx_data.service,
                 tx_type=tx_data.tx_type,
@@ -551,16 +643,18 @@ class TransactionRepository:
         service: str,
         tx_type: str,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
     ) -> Optional[datetime]:
+        predicates = [
+            Transaction.organization_id == organization_id,
+            Transaction.service == service,
+            Transaction.tx_type == tx_type,
+        ]
+        if integration_id is not None:
+            predicates.append(Transaction.integration_id == integration_id)
         query = (
             select(Transaction.tx_timestamp)
-            .where(
-                and_(
-                    Transaction.organization_id == organization_id,
-                    Transaction.service == service,
-                    Transaction.tx_type == tx_type,
-                )
-            )
+            .where(and_(*predicates))
             .order_by(desc(Transaction.tx_timestamp))
             .limit(1)
         )
