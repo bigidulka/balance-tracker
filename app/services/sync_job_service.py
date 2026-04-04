@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.balance import Integration, SyncJob
+from app.repositories.balance import BalanceRepository, ServiceStatusRepository
+from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 from app.services.entitlements_service import EntitlementsService
 from app.services.integrations import get_provider
 
@@ -22,6 +24,84 @@ class SyncJobService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.entitlements = EntitlementsService(session)
+        self.balance_repo = BalanceRepository(session)
+        self.status_repo = ServiceStatusRepository(session)
+
+    async def _persist_balance_from_refresh_result(
+        self,
+        organization_id: int,
+        refresh_data: dict[str, Any] | None,
+    ) -> None:
+        if not isinstance(refresh_data, dict):
+            return
+        raw_balance = refresh_data.get("balance")
+        if not isinstance(raw_balance, dict):
+            return
+
+        balance = ServiceBalanceSchema(
+            integration_id=(
+                int(raw_balance.get("integration_id"))
+                if raw_balance.get("integration_id") is not None
+                else None
+            ),
+            service=str(raw_balance.get("service") or ""),
+            accounts=[
+                AccountBalanceSchema(
+                    account_type=str(account.get("account_type") or "spot"),
+                    assets=[
+                        AssetSchema(
+                            coin=str(asset.get("coin") or ""),
+                            amount=float(asset.get("amount") or 0.0),
+                            value_usd=float(asset.get("value_usd") or 0.0),
+                        )
+                        for asset in (account.get("assets") or [])
+                        if isinstance(asset, dict)
+                    ],
+                    total_usd=float(account.get("total_usd") or 0.0),
+                )
+                for account in (raw_balance.get("accounts") or [])
+                if isinstance(account, dict)
+            ],
+            assets=[
+                AssetSchema(
+                    coin=str(asset.get("coin") or ""),
+                    amount=float(asset.get("amount") or 0.0),
+                    value_usd=float(asset.get("value_usd") or 0.0),
+                )
+                for asset in (raw_balance.get("assets") or [])
+                if isinstance(asset, dict)
+            ],
+            total_usd=float(raw_balance.get("total_usd") or 0.0),
+            updated_at=datetime.now(timezone.utc),
+            actual=bool(raw_balance.get("actual", True)),
+        )
+
+        if not balance.service:
+            return
+
+        if not balance.actual:
+            await self.status_repo.update_status(
+                balance.service,
+                is_healthy=False,
+                last_error="Degraded balance payload",
+                organization_id=organization_id,
+            )
+            raise ValueError(f"Degraded balance payload for {balance.service}")
+
+        await self.balance_repo.save_balance(
+            service=balance.service,
+            assets=balance.assets,
+            total_usd=balance.total_usd,
+            actual=balance.actual,
+            accounts=balance.accounts,
+            organization_id=organization_id,
+            integration_id=balance.integration_id,
+        )
+        await self.status_repo.update_status(
+            balance.service,
+            is_healthy=True,
+            organization_id=organization_id,
+        )
 
     def _attach_retry_metadata(self, detail: Any) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -249,6 +329,10 @@ class SyncJobService:
                 organization_id=job.organization_id,
                 integration=integration,
                 payload=job.payload or {},
+            )
+            await self._persist_balance_from_refresh_result(
+                organization_id=job.organization_id,
+                refresh_data=refresh_result.data,
             )
 
             integration.last_synced_at = datetime.now(timezone.utc)

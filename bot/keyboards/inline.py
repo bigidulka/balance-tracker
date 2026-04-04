@@ -27,6 +27,7 @@ from bot.contracts.callbacks import (
     ROUTE_INPUT,
     ROUTE_INTEGRATION_DETAIL,
     ROUTE_INTEGRATION_EXCHANGE_PICKER,
+    ROUTE_INTEGRATION_WALLET_PICKER,
     ROUTE_INTEGRATIONS,
     ROUTE_MAIN,
     ROUTE_PAYMENTS,
@@ -43,6 +44,7 @@ from bot.contracts.callbacks import (
 )
 from bot.contracts.exchange_emojis import resolve_exchange_emoji_id
 from bot.contracts.exchanges import SUPPORTED_CEX_EXCHANGES
+from bot.contracts.wallets import SUPPORTED_WALLET_PROVIDERS
 from bot.i18n import locale_label, t
 from bot.ui_emoji import UI_ICONS as _ICON_IDS
 
@@ -61,7 +63,8 @@ def _btn(
     return InlineKeyboardButton(
         text=text,
         callback_data=callback_data,
-        icon_custom_emoji_id=custom_emoji_id or _ICON_IDS.get(icon_key, _ICON_IDS["noop"]),
+        icon_custom_emoji_id=custom_emoji_id
+        or _ICON_IDS.get(icon_key, _ICON_IDS["noop"]),
     )
 
 
@@ -77,21 +80,79 @@ def main_menu(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        _btn(t(locale, "spot"), pack_callback(ROUTE_SPOT_LIST, ACTION_OPEN, rev=rev, source=ROUTE_MAIN, payload=_payload(page=0)), "spot"),
-        _btn(t(locale, "futures"), pack_callback(ROUTE_FUTURES_LIST, ACTION_OPEN, rev=rev, source=ROUTE_MAIN, payload=_payload(page=0)), "futures"),
+        _btn(
+            t(locale, "spot"),
+            pack_callback(
+                ROUTE_SPOT_LIST,
+                ACTION_OPEN,
+                rev=rev,
+                source=ROUTE_MAIN,
+                payload=_payload(page=0),
+            ),
+            "spot",
+        ),
+        _btn(
+            t(locale, "futures"),
+            pack_callback(
+                ROUTE_FUTURES_LIST,
+                ACTION_OPEN,
+                rev=rev,
+                source=ROUTE_MAIN,
+                payload=_payload(page=0),
+            ),
+            "futures",
+        ),
     )
     if allow_dex:
         builder.row(
-            _btn(t(locale, "dex_wallet"), pack_callback(ROUTE_DEX, ACTION_OPEN, rev=rev, source=ROUTE_MAIN, payload=_payload(page=0)), "dex"),
-            _btn(t(locale, "transactions"), pack_callback(ROUTE_TRANSACTIONS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN, payload=_payload(page=0)), "transactions"),
+            _btn(
+                t(locale, "dex_wallet"),
+                pack_callback(
+                    ROUTE_DEX,
+                    ACTION_OPEN,
+                    rev=rev,
+                    source=ROUTE_MAIN,
+                    payload=_payload(page=0),
+                ),
+                "dex",
+            ),
+            _btn(
+                t(locale, "transactions"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_OPEN,
+                    rev=rev,
+                    source=ROUTE_MAIN,
+                    payload=_payload(page=0),
+                ),
+                "transactions",
+            ),
         )
     else:
         builder.row(
-            _btn(t(locale, "transactions"), pack_callback(ROUTE_TRANSACTIONS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN, payload=_payload(page=0)), "transactions")
+            _btn(
+                t(locale, "transactions"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_OPEN,
+                    rev=rev,
+                    source=ROUTE_MAIN,
+                    payload=_payload(page=0),
+                ),
+                "transactions",
+            )
         )
     builder.row(
-        _btn(t(locale, "integrations"), pack_callback(ROUTE_INTEGRATIONS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN), "integrations"),
-        _btn(t(locale, "settings"), pack_callback(ROUTE_SETTINGS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN), "settings"),
+        _btn(
+            t(locale, "integrations"),
+            pack_callback(ROUTE_INTEGRATIONS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
+            "integrations",
+        ),
+        _btn(
+            t(locale, "settings"),
+            pack_callback(ROUTE_SETTINGS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
+            "settings",
+        ),
     )
     if plan_label:
         builder.row(
@@ -104,14 +165,32 @@ def main_menu(
     refresh_base = t(locale, "refresh")
     if refresh_time_label:
         refresh_base = f"{refresh_base} {refresh_time_label}"
-    refresh_text = refresh_base if can_refresh else f"{refresh_base} ({retry_after_seconds}s)"
+    refresh_text = (
+        refresh_base if can_refresh else f"{refresh_base} ({retry_after_seconds}s)"
+    )
     builder.row(
-        _btn(refresh_text, pack_callback(ROUTE_MAIN, ACTION_REFRESH if can_refresh else ACTION_NOOP, rev=rev), "refresh")
+        _btn(
+            refresh_text,
+            pack_callback(
+                ROUTE_MAIN, ACTION_REFRESH if can_refresh else ACTION_NOOP, rev=rev
+            ),
+            "refresh",
+        )
     )
     return builder.as_markup()
 
 
-def _exchange_list(*, route: str, detail_route: str, exchanges: list[str], page: int, per_page: int, rev: int, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
+def _exchange_list(
+    *,
+    route: str,
+    detail_route: str,
+    exchanges: list[str],
+    page: int,
+    per_page: int,
+    rev: int,
+    locale: str,
+    refresh_time_label: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     start = page * per_page
     end = start + per_page
@@ -120,54 +199,165 @@ def _exchange_list(*, route: str, detail_route: str, exchanges: list[str], page:
         builder.row(
             _btn(
                 exchange,
-                pack_callback(detail_route, ACTION_SELECT, rev=rev, source=route, payload=_payload(i=idx)),
+                pack_callback(
+                    detail_route,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=route,
+                    payload=_payload(i=idx),
+                ),
                 "wallet",
                 custom_emoji_id=exchange_emoji_id,
             )
         )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(route, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    route, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)
+                ),
+                "left",
+            )
+        )
     if end < len(exchanges):
-        nav.append(_btn(t(locale, "next"), pack_callback(route, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    route, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(route, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(route, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(refresh_text, pack_callback(route, ACTION_REFRESH, rev=rev), "refresh")
+    )
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(route, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
-def spot_exchanges(exchanges: list[str], page: int, per_page: int, rev: int, *, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
-    return _exchange_list(route=ROUTE_SPOT_LIST, detail_route=ROUTE_SPOT_DETAIL, exchanges=exchanges, page=page, per_page=per_page, rev=rev, locale=locale, refresh_time_label=refresh_time_label)
+def spot_exchanges(
+    exchanges: list[str],
+    page: int,
+    per_page: int,
+    rev: int,
+    *,
+    locale: str,
+    refresh_time_label: str | None = None,
+) -> InlineKeyboardMarkup:
+    return _exchange_list(
+        route=ROUTE_SPOT_LIST,
+        detail_route=ROUTE_SPOT_DETAIL,
+        exchanges=exchanges,
+        page=page,
+        per_page=per_page,
+        rev=rev,
+        locale=locale,
+        refresh_time_label=refresh_time_label,
+    )
 
 
-def futures_exchanges(exchanges: list[str], page: int, per_page: int, rev: int, *, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
-    return _exchange_list(route=ROUTE_FUTURES_LIST, detail_route=ROUTE_FUTURES_DETAIL, exchanges=exchanges, page=page, per_page=per_page, rev=rev, locale=locale, refresh_time_label=refresh_time_label)
+def futures_exchanges(
+    exchanges: list[str],
+    page: int,
+    per_page: int,
+    rev: int,
+    *,
+    locale: str,
+    refresh_time_label: str | None = None,
+) -> InlineKeyboardMarkup:
+    return _exchange_list(
+        route=ROUTE_FUTURES_LIST,
+        detail_route=ROUTE_FUTURES_DETAIL,
+        exchanges=exchanges,
+        page=page,
+        per_page=per_page,
+        rev=rev,
+        locale=locale,
+        refresh_time_label=refresh_time_label,
+    )
 
 
-def exchange_detail(route: str, rev: int, *, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
+def exchange_detail(
+    route: str, rev: int, *, locale: str, refresh_time_label: str | None = None
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(route, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(route, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(refresh_text, pack_callback(route, ACTION_REFRESH, rev=rev), "refresh")
+    )
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(route, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
-def dex(page: int, total_pages: int, rev: int, *, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
+def dex(
+    page: int,
+    total_pages: int,
+    rev: int,
+    *,
+    locale: str,
+    refresh_time_label: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)
+                ),
+                "left",
+            )
+        )
     if total_pages > 1:
-        nav.append(_btn(f"{page + 1}/{total_pages}", pack_callback(ROUTE_DEX, ACTION_NOOP, rev=rev), "wallet"))
+        nav.append(
+            _btn(
+                f"{page + 1}/{total_pages}",
+                pack_callback(ROUTE_DEX, ACTION_NOOP, rev=rev),
+                "wallet",
+            )
+        )
     if page < total_pages - 1:
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_DEX, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(refresh_text, pack_callback(ROUTE_DEX, ACTION_REFRESH, rev=rev), "refresh")
+    )
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
@@ -187,20 +377,50 @@ def dex_wallets(
         builder.row(
             _btn(
                 label,
-                pack_callback(ROUTE_DEX, ACTION_SELECT, rev=rev, source=ROUTE_DEX, payload=_payload(i=idx, page=0)),
+                pack_callback(
+                    ROUTE_DEX,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=ROUTE_DEX,
+                    payload=_payload(i=idx, page=0),
+                ),
                 "wallet",
             )
         )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)
+                ),
+                "left",
+            )
+        )
     if end < len(items):
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_DEX, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(refresh_text, pack_callback(ROUTE_DEX, ACTION_REFRESH, rev=rev), "refresh")
+    )
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
@@ -216,25 +436,77 @@ def dex_wallet_detail(
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(i=wallet_index, page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_DEX,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(i=wallet_index, page=page - 1),
+                ),
+                "left",
+            )
+        )
     if total_pages > 1:
-        nav.append(_btn(f"{page + 1}/{total_pages}", pack_callback(ROUTE_DEX, ACTION_NOOP, rev=rev), "wallet"))
+        nav.append(
+            _btn(
+                f"{page + 1}/{total_pages}",
+                pack_callback(ROUTE_DEX, ACTION_NOOP, rev=rev),
+                "wallet",
+            )
+        )
     if page < total_pages - 1:
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_DEX, ACTION_PAGE, rev=rev, payload=_payload(i=wallet_index, page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_DEX,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(i=wallet_index, page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_DEX, ACTION_REFRESH, rev=rev, payload=_payload(i=wallet_index, page=page)), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(
+            refresh_text,
+            pack_callback(
+                ROUTE_DEX,
+                ACTION_REFRESH,
+                rev=rev,
+                payload=_payload(i=wallet_index, page=page),
+            ),
+            "refresh",
+        )
+    )
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(ROUTE_DEX, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
-def settings(hide_small: bool, language: str, rev: int, *, locale: str, is_admin: bool = False) -> InlineKeyboardMarkup:
+def settings(
+    hide_small: bool, language: str, rev: int, *, locale: str, is_admin: bool = False
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         _btn(
             f"{t(locale, 'language')}: {locale_label(language)}",
-            pack_callback(ROUTE_SETTINGS, ACTION_SELECT, rev=rev, payload=_payload(field="language")),
+            pack_callback(
+                ROUTE_SETTINGS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="language"),
+            ),
             "settings",
         )
     )
@@ -253,7 +525,13 @@ def settings(hide_small: bool, language: str, rev: int, *, locale: str, is_admin
                 "admin",
             )
         )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_SETTINGS, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_SETTINGS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -300,7 +578,9 @@ def plan_screen(
             "input",
         ),
     )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_PLAN, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(t(locale, "back"), pack_callback(ROUTE_PLAN, ACTION_BACK, rev=rev), "back")
+    )
     return builder.as_markup()
 
 
@@ -316,7 +596,12 @@ def payments_screen(
         builder.row(
             _btn(
                 f"${amount}",
-                pack_callback(ROUTE_PAYMENTS, ACTION_SELECT, rev=rev, payload=_payload(amount=amount)),
+                pack_callback(
+                    ROUTE_PAYMENTS,
+                    ACTION_SELECT,
+                    rev=rev,
+                    payload=_payload(amount=amount),
+                ),
                 "wallet",
             )
         )
@@ -324,13 +609,32 @@ def payments_screen(
         builder.row(
             _btn(
                 t(locale, "check_payment"),
-                pack_callback(ROUTE_PAYMENTS, ACTION_REFRESH, rev=rev, payload=_payload(id=invoice_id)),
+                pack_callback(
+                    ROUTE_PAYMENTS,
+                    ACTION_REFRESH,
+                    rev=rev,
+                    payload=_payload(id=invoice_id),
+                ),
                 "refresh",
             )
         )
-    refresh_text = t(locale, "refresh") if not refresh_time_label else f"{t(locale, 'refresh')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_PAYMENTS, ACTION_OPEN, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_PAYMENTS, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(
+            refresh_text, pack_callback(ROUTE_PAYMENTS, ACTION_OPEN, rev=rev), "refresh"
+        )
+    )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_PAYMENTS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -339,11 +643,21 @@ def admin_screen(rev: int, *, locale: str) -> InlineKeyboardMarkup:
     builder.row(
         _btn(
             t(locale, "users"),
-            pack_callback(ROUTE_ADMIN_USERS, ACTION_OPEN, rev=rev, source=ROUTE_ADMIN, payload=_payload(page=0)),
+            pack_callback(
+                ROUTE_ADMIN_USERS,
+                ACTION_OPEN,
+                rev=rev,
+                source=ROUTE_ADMIN,
+                payload=_payload(page=0),
+            ),
             "admin",
         )
     )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_ADMIN, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"), pack_callback(ROUTE_ADMIN, ACTION_BACK, rev=rev), "back"
+        )
+    )
     return builder.as_markup()
 
 
@@ -361,8 +675,14 @@ def admin_users(
         user_id = int(item.get("user_id") or 0)
         organization_id = int(item.get("organization_id") or 0)
         username = str(item.get("telegram_username") or "").strip()
-        full_name = str(item.get("telegram_full_name") or item.get("full_name") or "").strip()
-        label = f"@{username}" if username else (full_name or str(item.get("email") or f"user-{user_id}"))
+        full_name = str(
+            item.get("telegram_full_name") or item.get("full_name") or ""
+        ).strip()
+        label = (
+            f"@{username}"
+            if username
+            else (full_name or str(item.get("email") or f"user-{user_id}"))
+        )
         builder.row(
             _btn(
                 label,
@@ -378,12 +698,40 @@ def admin_users(
         )
     nav: list[InlineKeyboardButton] = []
     if has_prev:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_ADMIN_USERS, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_ADMIN_USERS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page - 1),
+                ),
+                "left",
+            )
+        )
     if has_next:
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_ADMIN_USERS, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_ADMIN_USERS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_ADMIN_USERS, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_ADMIN_USERS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -407,7 +755,13 @@ def admin_user_detail(
             "refresh",
         )
     )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_ADMIN_USER_DETAIL, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_ADMIN_USER_DETAIL, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -427,38 +781,186 @@ def transactions(
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if has_prev:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page - 1),
+                ),
+                "left",
+            )
+        )
     if total_pages > 1:
-        nav.append(_btn(f"{page + 1}", pack_callback(ROUTE_TRANSACTIONS, ACTION_NOOP, rev=rev), "wallet"))
+        nav.append(
+            _btn(
+                f"{page + 1}",
+                pack_callback(ROUTE_TRANSACTIONS, ACTION_NOOP, rev=rev),
+                "wallet",
+            )
+        )
     if has_next:
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
     builder.row(
-        _btn(f"{t(locale, 'type')}: {t(locale, 'all')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_type", value="all")), "filter"),
-        _btn(f"{t(locale, 'type')}: {t(locale, 'deposit')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_type", value="deposit")), "filter"),
-        _btn(f"{t(locale, 'type')}: {t(locale, 'withdrawal')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_type", value="withdrawal")), "filter"),
+        _btn(
+            f"{t(locale, 'type')}: {t(locale, 'all')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_type", value="all"),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"{t(locale, 'type')}: {t(locale, 'deposit')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_type", value="deposit"),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"{t(locale, 'type')}: {t(locale, 'withdrawal')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_type", value="withdrawal"),
+            ),
+            "filter",
+        ),
     )
     builder.row(
-        _btn(f"{t(locale, 'state')}: {t(locale, 'all')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_status", value="all")), "filter"),
-        _btn(f"{t(locale, 'state')}: {t(locale, 'ok')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_status", value="ok")), "filter"),
+        _btn(
+            f"{t(locale, 'state')}: {t(locale, 'all')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_status", value="all"),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"{t(locale, 'state')}: {t(locale, 'ok')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_status", value="ok"),
+            ),
+            "filter",
+        ),
     )
     builder.row(
-        _btn(f"{t(locale, 'state')}: {t(locale, 'pending')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_status", value="pending")), "filter"),
-        _btn(f"{t(locale, 'state')}: {t(locale, 'failed')}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_status", value="failed")), "filter"),
+        _btn(
+            f"{t(locale, 'state')}: {t(locale, 'pending')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_status", value="pending"),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"{t(locale, 'state')}: {t(locale, 'failed')}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_status", value="failed"),
+            ),
+            "filter",
+        ),
     )
     builder.row(
-        _btn(f"24h{' •' if selected_since_hours == 24 else ''}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_since_hours", value=24)), "filter"),
-        _btn(f"7d{' •' if selected_since_hours == 24 * 7 else ''}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_since_hours", value=24 * 7)), "filter"),
-        _btn(f"30d{' •' if selected_since_hours == 24 * 30 else ''}", pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, payload=_payload(field="tx_since_hours", value=24 * 30)), "filter"),
+        _btn(
+            f"24h{' •' if selected_since_hours == 24 else ''}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_since_hours", value=24),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"7d{' •' if selected_since_hours == 24 * 7 else ''}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_since_hours", value=24 * 7),
+            ),
+            "filter",
+        ),
+        _btn(
+            f"30d{' •' if selected_since_hours == 24 * 30 else ''}",
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="tx_since_hours", value=24 * 30),
+            ),
+            "filter",
+        ),
     )
     builder.row(
-        _btn(t(locale, "custom_window"), pack_callback(ROUTE_INPUT, ACTION_INPUT_START, rev=rev, source=ROUTE_TRANSACTIONS, payload=_payload(kind=encode_input_kind("tx_since_hours"))), "input"),
-        _btn(t(locale, "reset"), pack_callback(ROUTE_TRANSACTIONS, ACTION_RESET, rev=rev), "reset"),
+        _btn(
+            t(locale, "custom_window"),
+            pack_callback(
+                ROUTE_INPUT,
+                ACTION_INPUT_START,
+                rev=rev,
+                source=ROUTE_TRANSACTIONS,
+                payload=_payload(kind=encode_input_kind("tx_since_hours")),
+            ),
+            "input",
+        ),
+        _btn(
+            t(locale, "reset"),
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_RESET, rev=rev),
+            "reset",
+        ),
     )
-    refresh_text = t(locale, "refresh_transactions") if not refresh_time_label else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_TRANSACTIONS, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh_transactions")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(
+            refresh_text,
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_REFRESH, rev=rev),
+            "refresh",
+        )
+    )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -478,20 +980,64 @@ def transaction_sources(
         builder.row(
             _btn(
                 label,
-                pack_callback(ROUTE_TRANSACTIONS, ACTION_SELECT, rev=rev, source=ROUTE_TRANSACTIONS, payload=_payload(i=idx, page=0)),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=ROUTE_TRANSACTIONS,
+                    payload=_payload(i=idx, page=0),
+                ),
                 "transactions",
             )
         )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page - 1),
+                ),
+                "left",
+            )
+        )
     if end < len(items):
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh_transactions") if not refresh_time_label else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_TRANSACTIONS, ACTION_REFRESH, rev=rev), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh_transactions")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(
+            refresh_text,
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_REFRESH, rev=rev),
+            "refresh",
+        )
+    )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -509,16 +1055,65 @@ def transaction_detail(
     builder = InlineKeyboardBuilder()
     nav: list[InlineKeyboardButton] = []
     if has_prev:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(i=source_index, page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(i=source_index, page=page - 1),
+                ),
+                "left",
+            )
+        )
     if total_pages > 1:
-        nav.append(_btn(f"{page + 1}", pack_callback(ROUTE_TRANSACTIONS, ACTION_NOOP, rev=rev), "transactions"))
+        nav.append(
+            _btn(
+                f"{page + 1}",
+                pack_callback(ROUTE_TRANSACTIONS, ACTION_NOOP, rev=rev),
+                "transactions",
+            )
+        )
     if has_next:
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_TRANSACTIONS, ACTION_PAGE, rev=rev, payload=_payload(i=source_index, page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_TRANSACTIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(i=source_index, page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
-    refresh_text = t(locale, "refresh_transactions") if not refresh_time_label else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
-    builder.row(_btn(refresh_text, pack_callback(ROUTE_TRANSACTIONS, ACTION_REFRESH, rev=rev, payload=_payload(i=source_index, page=page)), "refresh"))
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev), "back"))
+    refresh_text = (
+        t(locale, "refresh_transactions")
+        if not refresh_time_label
+        else f"{t(locale, 'refresh_transactions')} {refresh_time_label}"
+    )
+    builder.row(
+        _btn(
+            refresh_text,
+            pack_callback(
+                ROUTE_TRANSACTIONS,
+                ACTION_REFRESH,
+                rev=rev,
+                payload=_payload(i=source_index, page=page),
+            ),
+            "refresh",
+        )
+    )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_TRANSACTIONS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
@@ -537,7 +1132,11 @@ def integrations(
     page_items = items[start:end]
     for item in page_items:
         integration_id = int(item["id"])
-        name = str(item.get("name") or f"integration-{integration_id}")
+        name = str(
+            item.get("display_name")
+            or item.get("name")
+            or f"integration-{integration_id}"
+        )
         status = t(locale, "on") if bool(item.get("is_active")) else t(locale, "off")
         exchange_emoji_id = resolve_exchange_emoji_id(
             str(item.get("exchange_code") or item.get("provider") or name)
@@ -545,34 +1144,95 @@ def integrations(
         builder.row(
             _btn(
                 f"{name} [{status}]",
-                pack_callback(ROUTE_INTEGRATION_DETAIL, ACTION_SELECT, rev=rev, source=ROUTE_INTEGRATIONS, payload=_payload(id=integration_id)),
+                pack_callback(
+                    ROUTE_INTEGRATION_DETAIL,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=ROUTE_INTEGRATIONS,
+                    payload=_payload(id=integration_id),
+                ),
                 "wallet",
                 custom_emoji_id=exchange_emoji_id,
             )
         )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(_btn(t(locale, "previous"), pack_callback(ROUTE_INTEGRATIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page - 1)), "left"))
+        nav.append(
+            _btn(
+                t(locale, "previous"),
+                pack_callback(
+                    ROUTE_INTEGRATIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page - 1),
+                ),
+                "left",
+            )
+        )
     if end < len(items):
-        nav.append(_btn(t(locale, "next"), pack_callback(ROUTE_INTEGRATIONS, ACTION_PAGE, rev=rev, payload=_payload(page=page + 1)), "right"))
+        nav.append(
+            _btn(
+                t(locale, "next"),
+                pack_callback(
+                    ROUTE_INTEGRATIONS,
+                    ACTION_PAGE,
+                    rev=rev,
+                    payload=_payload(page=page + 1),
+                ),
+                "right",
+            )
+        )
     if nav:
         builder.row(*nav)
     builder.row(
-        _btn(t(locale, "add_exchange"), pack_callback(ROUTE_INTEGRATION_EXCHANGE_PICKER, ACTION_OPEN, rev=rev, source=ROUTE_INTEGRATIONS), "add"),
-        _btn(t(locale, "add_wallet"), pack_callback(ROUTE_INPUT, ACTION_INPUT_START, rev=rev, source=ROUTE_INTEGRATIONS, payload=_payload(kind=encode_input_kind("integration_dex_wallet_address"))), "add"),
+        _btn(
+            t(locale, "add_exchange"),
+            pack_callback(
+                ROUTE_INTEGRATION_EXCHANGE_PICKER,
+                ACTION_OPEN,
+                rev=rev,
+                source=ROUTE_INTEGRATIONS,
+            ),
+            "add",
+        ),
+        _btn(
+            t(locale, "add_wallet"),
+            pack_callback(
+                ROUTE_INTEGRATION_WALLET_PICKER,
+                ACTION_OPEN,
+                rev=rev,
+                source=ROUTE_INTEGRATIONS,
+            ),
+            "add",
+        ),
     )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_INTEGRATIONS, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_INTEGRATIONS, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
-def integration_actions(integration_id: int, is_active: bool, rev: int, *, locale: str, refresh_time_label: str | None = None) -> InlineKeyboardMarkup:
+def integration_actions(
+    integration_id: int,
+    is_active: bool,
+    rev: int,
+    *,
+    locale: str,
+    refresh_time_label: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         _btn(
             t(locale, "disable") if is_active else t(locale, "enable"),
             pack_callback(
                 ROUTE_INTEGRATION_DETAIL,
-                ACTION_INTEGRATION_DEACTIVATE if is_active else ACTION_INTEGRATION_ACTIVATE,
+                ACTION_INTEGRATION_DEACTIVATE
+                if is_active
+                else ACTION_INTEGRATION_ACTIVATE,
                 rev=rev,
                 payload=_payload(id=integration_id),
             ),
@@ -587,7 +1247,9 @@ def integration_actions(integration_id: int, is_active: bool, rev: int, *, local
                 ACTION_INPUT_START,
                 rev=rev,
                 source=ROUTE_INTEGRATION_DETAIL,
-                payload=_payload(kind=encode_input_kind("integration_rename"), id=integration_id),
+                payload=_payload(
+                    kind=encode_input_kind("integration_rename"), id=integration_id
+                ),
             ),
             "input",
         ),
@@ -600,9 +1262,15 @@ def integration_actions(integration_id: int, is_active: bool, rev: int, *, local
                 payload=_payload(id=integration_id),
             ),
             "delete",
+        ),
+    )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_INTEGRATION_DETAIL, ACTION_BACK, rev=rev),
+            "back",
         )
     )
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_INTEGRATION_DETAIL, ACTION_BACK, rev=rev), "back"))
     return builder.as_markup()
 
 
@@ -610,11 +1278,19 @@ def integration_exchange_picker(rev: int, *, locale: str) -> InlineKeyboardMarku
     builder = InlineKeyboardBuilder()
     row: list[InlineKeyboardButton] = []
     for code, label in SUPPORTED_CEX_EXCHANGES:
-        exchange_emoji_id = resolve_exchange_emoji_id(code) or resolve_exchange_emoji_id(label)
+        exchange_emoji_id = resolve_exchange_emoji_id(
+            code
+        ) or resolve_exchange_emoji_id(label)
         row.append(
             _btn(
                 label,
-                pack_callback(ROUTE_INTEGRATION_EXCHANGE_PICKER, ACTION_SELECT, rev=rev, source=ROUTE_INTEGRATIONS, payload=_payload(exchange_code=code)),
+                pack_callback(
+                    ROUTE_INTEGRATION_EXCHANGE_PICKER,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=ROUTE_INTEGRATIONS,
+                    payload=_payload(exchange_code=code),
+                ),
                 "wallet",
                 custom_emoji_id=exchange_emoji_id,
             )
@@ -624,11 +1300,47 @@ def integration_exchange_picker(rev: int, *, locale: str) -> InlineKeyboardMarku
             row = []
     if row:
         builder.row(*row)
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_INTEGRATION_EXCHANGE_PICKER, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_INTEGRATION_EXCHANGE_PICKER, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
+    return builder.as_markup()
+
+
+def integration_wallet_picker(rev: int, *, locale: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for code, label in SUPPORTED_WALLET_PROVIDERS:
+        builder.row(
+            _btn(
+                label,
+                pack_callback(
+                    ROUTE_INTEGRATION_WALLET_PICKER,
+                    ACTION_SELECT,
+                    rev=rev,
+                    source=ROUTE_INTEGRATIONS,
+                    payload=_payload(wallet_provider=code),
+                ),
+                "wallet",
+            )
+        )
+    builder.row(
+        _btn(
+            t(locale, "back"),
+            pack_callback(ROUTE_INTEGRATION_WALLET_PICKER, ACTION_BACK, rev=rev),
+            "back",
+        )
+    )
     return builder.as_markup()
 
 
 def input_waiting(rev: int, *, locale: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(_btn(t(locale, "back"), pack_callback(ROUTE_INPUT, ACTION_BACK, rev=rev), "back"))
+    builder.row(
+        _btn(
+            t(locale, "back"), pack_callback(ROUTE_INPUT, ACTION_BACK, rev=rev), "back"
+        )
+    )
     return builder.as_markup()

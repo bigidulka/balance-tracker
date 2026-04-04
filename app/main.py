@@ -2,13 +2,17 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.core.database import async_session_maker, init_db
+from app.core.database import async_session_maker, engine, init_db, is_sqlite
 from app.core.middleware import RequestContextMiddleware
+from app.core.security import SecurityError, decode_access_token
 from app.repositories.auth import AuthRepository
+from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.balances import router as balances_router
 from app.routers.billing import router as billing_router
@@ -41,6 +45,34 @@ _background_task: asyncio.Task | None = None
 _sync_worker_tasks: list[asyncio.Task] = []
 
 
+async def _repair_sqlite_service_status_index() -> None:
+    if not is_sqlite:
+        return
+
+    async with engine.begin() as conn:
+        rows = (
+            await conn.execute(text("PRAGMA index_list('service_status')"))
+        ).fetchall()
+        index_names = {row[1] for row in rows}
+
+        if "ix_service_status_org_service" in index_names:
+            return
+
+        if "ix_service_status_service" in index_names:
+            logger.info(
+                "Repairing legacy SQLite index ix_service_status_service -> ix_service_status_org_service"
+            )
+            await conn.execute(text("DROP INDEX IF EXISTS ix_service_status_service"))
+
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_service_status_org_service "
+                "ON service_status (organization_id, service)"
+            )
+        )
+        logger.info("SQLite service_status index verified")
+
+
 def _is_refresh_loop_enabled() -> bool:
     if settings.enable_legacy_background_refresh_loop is not None:
         return settings.enable_legacy_background_refresh_loop
@@ -54,9 +86,12 @@ def _is_worker_enabled() -> bool:
 
 
 async def background_refresh_loop():
-    """Background task to refresh balances periodically"""
-    refresh_interval = settings.balance_cache_ttl  # seconds
-    logger.info(f"Background refresh started, interval: {refresh_interval}s")
+    """Background task that enforces plan-based auto-refresh cadence."""
+    poll_interval = max(1.0, settings.background_refresh_poll_interval_seconds)
+    logger.info(
+        "Background refresh started, poll_interval=%ss, cadence=per-plan",
+        poll_interval,
+    )
 
     # Initial delay before first refresh
     await asyncio.sleep(10)
@@ -73,14 +108,30 @@ async def background_refresh_loop():
 
                 total_services = 0
                 total_usd = 0.0
-                entitlements = EntitlementsService(db)
                 for organization in organizations:
                     try:
-                        await entitlements.ensure_refresh_interval_for_organization(organization.id)
+                        service = BalanceService(db, organization_id=organization.id)
+                        updated, failed = await service.refresh_all()
+                        if not updated and not failed:
+                            logger.debug(
+                                "Background refresh: org %s has no active integrations",
+                                organization.id,
+                            )
+                            continue
+                        result = await service.get_all_balances(force_refresh=False)
+                        total_services += len(result.services)
+                        total_usd += result.total_usd
+                        logger.info(
+                            "Background refresh completed for org %s: updated=%s failed=%s total_usd=%.2f",
+                            organization.id,
+                            len(updated),
+                            len(failed),
+                            result.total_usd,
+                        )
                     except HTTPException as exc:
                         detail = exc.detail if isinstance(exc.detail, dict) else {}
                         logger.info(
-                            "Background refresh skipped for org %s: rate limited%s",
+                            "Background refresh skipped for org %s: next plan refresh not due%s",
                             organization.id,
                             (
                                 f", retry_after_seconds={detail.get('retry_after_seconds')}"
@@ -89,11 +140,6 @@ async def background_refresh_loop():
                             ),
                         )
                         continue
-
-                    service = BalanceService(db, organization_id=organization.id)
-                    result = await service.get_all_balances(force_refresh=True)
-                    total_services += len(result.services)
-                    total_usd += result.total_usd
 
                 logger.info(
                     f"Background refresh completed: {total_services} services, "
@@ -105,7 +151,7 @@ async def background_refresh_loop():
         except Exception as e:
             logger.error(f"Background refresh error: {e}")
 
-        await asyncio.sleep(refresh_interval)
+        await asyncio.sleep(poll_interval)
 
 
 async def inprocess_sync_worker_loop(worker_id: int):
@@ -136,11 +182,34 @@ async def inprocess_sync_worker_loop(worker_id: int):
             await asyncio.sleep(settings.sync_worker_poll_interval_seconds)
 
 
+async def _ensure_api_token_identity() -> None:
+    if not settings.api_token:
+        return
+
+    try:
+        payload = decode_access_token(settings.api_token)
+        user_id = int(payload.get("sub"))
+        organization_id = int(payload.get("org") or settings.default_org_id)
+    except (SecurityError, TypeError, ValueError) as exc:
+        logger.warning("Skipping API_TOKEN bootstrap identity: %s", exc)
+        return
+
+    async with async_session_maker() as db:
+        await AuthRepository(db).ensure_service_identity(
+            user_id=user_id,
+            organization_id=organization_id,
+            email=f"api-user-{user_id}@local.invalid",
+            full_name="API Service User",
+            role="owner",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _background_task, _sync_worker_tasks
     logger.info("Starting Balance Tracker API")
     await init_db()
+    await _repair_sqlite_service_status_index()
     logger.info("Database initialized")
 
     async with async_session_maker() as db:
@@ -154,6 +223,7 @@ async def lifespan(app: FastAPI):
         for organization in organizations:
             await entitlements.ensure_default_subscription(organization.id)
 
+    await _ensure_api_token_identity()
     logger.info("Default plans and subscriptions ensured")
 
     if _is_refresh_loop_enabled():
@@ -217,6 +287,7 @@ app.add_middleware(
 app.add_middleware(RequestContextMiddleware)
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(balances_router)
 app.include_router(transactions_router)
 app.include_router(integrations_router)

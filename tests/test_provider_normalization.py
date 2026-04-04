@@ -1,5 +1,6 @@
 import unittest
 
+from app.core.config import Settings
 from app.services.ccxt_manager import CCXTManager, EXCHANGE_ACCOUNT_TYPES
 
 
@@ -52,3 +53,22 @@ class ProviderNormalizationSmokeTests(unittest.TestCase):
         self.assertEqual(tx.status, "pending")
         self.assertEqual(tx.service, "okx")
         self.assertEqual(tx.tx_type, "withdrawal")
+
+
+class ServiceEnablementTests(unittest.TestCase):
+    def test_okx_disable_does_not_hide_okx_wallet(self):
+        settings = Settings(
+            exchange_transport_overrides='{"okx":"disabled"}',
+            _env_file=None,
+        )
+
+        self.assertFalse(settings.is_service_enabled("okx"))
+        self.assertTrue(settings.is_service_enabled("okx_wallet_6555B26D"))
+
+    def test_okx_wallet_can_be_disabled_explicitly(self):
+        settings = Settings(
+            exchange_transport_overrides='{"okx":"disabled","okx_wallet":"disabled"}',
+            _env_file=None,
+        )
+
+        self.assertFalse(settings.is_service_enabled("okx_wallet_6555B26D"))

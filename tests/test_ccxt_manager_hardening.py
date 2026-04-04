@@ -4,7 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.services import ccxt_manager as ccxt_manager_module
-from app.services.ccxt_manager import CCXTManager, _LimiterEntry
+from app.services.ccxt_manager import (
+    CCXTManager,
+    EXCHANGE_ACCOUNT_TYPES,
+    RAW_BALANCE_STRATEGIES,
+    _LimiterEntry,
+)
 
 
 class KeyedLimiterEvictionTests(unittest.TestCase):
@@ -41,6 +46,101 @@ class KeyedLimiterEvictionTests(unittest.TestCase):
         self.assertNotIn("oldest", manager._keyed_limiters)
         self.assertIn("middle", manager._keyed_limiters)
         self.assertIn("newest", manager._keyed_limiters)
+
+
+class RawBalanceRoutingContractTests(unittest.TestCase):
+    def test_raw_balance_strategy_map_covers_all_exchanges(self):
+        for exchange_id in EXCHANGE_ACCOUNT_TYPES:
+            self.assertIn(exchange_id, RAW_BALANCE_STRATEGIES)
+
+    def test_route_key_is_stable_for_account_params(self):
+        manager = CCXTManager()
+        self.assertEqual(
+            manager._raw_balance_route_key({"type": "swap", "subType": "linear"}),
+            "type=swap|subType=linear|settle=",
+        )
+        self.assertEqual(
+            manager._raw_balance_route_key({}),
+            "type=__default__|subType=|settle=",
+        )
+
+
+class RawBalanceFallbackBehaviorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_raw_then_fallback_uses_legacy_and_updates_metrics(self):
+        manager = CCXTManager()
+        exchange = AsyncMock()
+        exchange.fetch_balance = AsyncMock(return_value={"total": {"USDT": 5}})
+
+        with patch.object(
+            ccxt_manager_module,
+            "settings",
+            SimpleNamespace(enable_ccxt_raw_balance_path=True),
+        ):
+            with patch.object(
+                manager,
+                "_fetch_account_balance_via_raw_ccxt",
+                new=AsyncMock(side_effect=AttributeError("missing method")),
+            ):
+                with patch.object(
+                    manager,
+                    "_run_exchange_call",
+                    new=AsyncMock(return_value={"total": {"USDT": 5}}),
+                ):
+                    with patch.object(
+                        manager,
+                        "_calculate_usd_value",
+                        new=AsyncMock(return_value=5.0),
+                    ):
+                        before = ccxt_manager_module.metrics_service.snapshot()
+                        result = await manager._fetch_account_balance(
+                            exchange,
+                            "bybit",
+                            {"type": "spot", "params": {"type": "unified"}},
+                            tickers={},
+                        )
+                        after = ccxt_manager_module.metrics_service.snapshot()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.total_usd, 5.0)
+        self.assertEqual(
+            after.get("ccxt_balance_path_fallback_total", 0),
+            before.get("ccxt_balance_path_fallback_total", 0) + 1,
+        )
+        self.assertEqual(
+            after.get("ccxt_balance_path_legacy_total", 0),
+            before.get("ccxt_balance_path_legacy_total", 0) + 1,
+        )
+
+    async def test_legacy_path_when_raw_flag_is_disabled(self):
+        manager = CCXTManager()
+        exchange = AsyncMock()
+        exchange.fetch_balance = AsyncMock(return_value={"total": {"USDT": 10}})
+
+        with patch.object(
+            ccxt_manager_module,
+            "settings",
+            SimpleNamespace(enable_ccxt_raw_balance_path=False),
+        ):
+            with patch.object(
+                manager,
+                "_run_exchange_call",
+                new=AsyncMock(return_value={"total": {"USDT": 10}}),
+            ) as run_call:
+                with patch.object(
+                    manager,
+                    "_calculate_usd_value",
+                    new=AsyncMock(return_value=10.0),
+                ):
+                    result = await manager._fetch_account_balance(
+                        exchange,
+                        "binance",
+                        {"type": "spot", "params": {"type": "spot"}},
+                        tickers={},
+                    )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.total_usd, 10.0)
+        run_call.assert_awaited()
 
 
 class BitmartTickerFallbackTests(unittest.IsolatedAsyncioTestCase):

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
-from app.models.balance import Balance, Integration, Organization, Transaction
-from app.routers.balances import get_dashboard_summary
+from app.models.balance import Balance, BalanceHistory, Integration, Organization, Transaction
+from app.routers.balances import get_dashboard_summary, get_history, get_history_chart
 from app.routers.integrations import (
     activate_integration,
     deactivate_integration,
@@ -120,6 +120,7 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
                     "futures_total",
                     "dex_total",
                     "freshness",
+                    "latest_updated_at",
                     "plan",
                     "capabilities",
                     "throttling",
@@ -204,6 +205,7 @@ class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
                     "chain",
                     "is_active",
                     "created_at",
+                    "updated_at",
                 },
             )
             self.assertFalse(deactivated.is_active)
@@ -231,3 +233,117 @@ class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refresh.integration_id, integration.id)
             self.assertGreater(refresh.job_id, 0)
             self.assertIn(refresh.job_status, {"queued", "running"})
+
+
+class HistoryContractTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.session_maker = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    async def test_history_response_shape_is_extended_but_stable(self):
+        async with self.session_maker() as session:
+            org = Organization(name="History Org", slug="history-org")
+            session.add(org)
+            await session.flush()
+
+            now = datetime.now(timezone.utc)
+            session.add_all(
+                [
+                    BalanceHistory(
+                        organization_id=org.id,
+                        service="binance",
+                        assets=[{"coin": "USDT", "amount": 100.0, "value_usd": 100.0}],
+                        accounts=[{"account_type": "spot", "assets": [], "total_usd": 100.0}],
+                        total_usd=100.0,
+                        actual=True,
+                        created_at=now,
+                    ),
+                    BalanceHistory(
+                        organization_id=org.id,
+                        service="binance",
+                        assets=[],
+                        accounts=[],
+                        total_usd=0.0,
+                        actual=False,
+                        created_at=now + timedelta(hours=1),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            response = await get_history(
+                service="binance",
+                start_date=None,
+                end_date=None,
+                limit=100,
+                db=session,
+                organization_id=org.id,
+                _=object(),
+            )
+
+            payload = response.model_dump()
+            self.assertEqual(set(payload.keys()), {"service", "entries", "total_entries"})
+            self.assertEqual(payload["total_entries"], 2)
+            self.assertEqual(
+                set(payload["entries"][0].keys()),
+                {"service", "total_usd", "assets", "accounts", "actual", "created_at"},
+            )
+
+    async def test_history_chart_response_shape_is_stable(self):
+        async with self.session_maker() as session:
+            org = Organization(name="History Chart Org", slug="history-chart-org")
+            session.add(org)
+            await session.flush()
+
+            now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            session.add_all(
+                [
+                    BalanceHistory(
+                        organization_id=org.id,
+                        service="binance",
+                        assets=[],
+                        accounts=[],
+                        total_usd=100.0,
+                        actual=True,
+                        created_at=now,
+                    ),
+                    BalanceHistory(
+                        organization_id=org.id,
+                        service="binance",
+                        assets=[],
+                        accounts=[],
+                        total_usd=120.0,
+                        actual=True,
+                        created_at=now + timedelta(hours=2),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            response = await get_history_chart(
+                service="binance",
+                start_date=now,
+                end_date=now + timedelta(hours=2),
+                interval="hour",
+                fill="forward",
+                order="asc",
+                db=session,
+                organization_id=org.id,
+                _=object(),
+            )
+
+            payload = response.model_dump()
+            self.assertEqual(set(payload.keys()), {"service", "interval", "fill", "order", "points"})
+            self.assertEqual(payload["interval"], "hour")
+            self.assertEqual(payload["fill"], "forward")
+            self.assertEqual(payload["order"], "asc")
+            self.assertGreaterEqual(len(payload["points"]), 3)
+            self.assertEqual(
+                set(payload["points"][0].keys()),
+                {"bucket_start", "bucket_end", "total_usd", "actual", "point_type"},
+            )

@@ -3,11 +3,16 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio import Redis
 
 from bot.config import settings
 from bot.handlers import router
 from bot.api_client import api_client
+from bot.middlewares.context import ContextMiddleware
 from bot.notifications import notification_loop, transaction_notification_loop
+from bot.services.runtime import close_runtime
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -17,6 +22,17 @@ logger = logging.getLogger(__name__)
 # Background tasks for notifications
 _notification_task: asyncio.Task | None = None
 _tx_notification_task: asyncio.Task | None = None
+
+
+async def _build_storage():
+    try:
+        redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+        await redis.ping()
+        logger.info("Using Redis FSM storage at %s", settings.redis_url)
+        return RedisStorage(redis=redis)
+    except Exception as exc:
+        logger.warning("Redis FSM storage unavailable, falling back to MemoryStorage: %s", exc)
+        return MemoryStorage()
 
 
 async def main():
@@ -30,7 +46,11 @@ async def main():
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    storage = await _build_storage()
+    dp = Dispatcher(storage=storage)
+    context_middleware = ContextMiddleware()
+    dp.message.middleware(context_middleware)
+    dp.callback_query.middleware(context_middleware)
     dp.include_router(router)
 
     logger.info("Starting bot...")
@@ -70,6 +90,8 @@ async def main():
                 pass
 
         await api_client.close()
+        await close_runtime()
+        await storage.close()
         await bot.session.close()
 
 

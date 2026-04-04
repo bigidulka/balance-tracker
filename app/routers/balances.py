@@ -18,8 +18,10 @@ from app.repositories.balance import (
 from app.schemas.balance import (
     AccountBalanceSchema,
     AssetSchema,
+    ChartPointSchema,
     DashboardSummaryResponse,
     HealthResponse,
+    HistoryChartResponse,
     HistoryEntrySchema,
     HistoryResponse,
     PortfolioResponse,
@@ -33,11 +35,31 @@ from app.services.entitlements_service import EntitlementsService
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.integration_service import IntegrationService
 from app.services.metrics_service import metrics_service
+from app.services.okx_wallet import okx_wallet_service
 from app.services.refresh_orchestrator import RefreshOrchestrator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["balances"])
 settings = get_settings()
+
+
+def _floor_bucket(value: datetime, interval: str) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(timezone.utc)
+    if interval == "hour":
+        return value.replace(minute=0, second=0, microsecond=0)
+    if interval == "day":
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)
+    raise ValueError(f"Unsupported interval: {interval}")
+
+
+def _next_bucket(value: datetime, interval: str) -> datetime:
+    if interval == "hour":
+        return value + timedelta(hours=1)
+    if interval == "day":
+        return value + timedelta(days=1)
+    raise ValueError(f"Unsupported interval: {interval}")
 
 
 @router.get("/balances", response_model=PortfolioResponse)
@@ -59,11 +81,32 @@ async def get_cached_balances(
 ):
     repo = BalanceRepository(db)
     balances = await repo.get_all_latest_balances(organization_id=organization_id)
+    active_integrations = await IntegrationService(db).list_integrations(
+        organization_id=organization_id,
+        include_inactive=False,
+    )
+    allowed_services: set[str] = set()
+    for integration in active_integrations:
+        kind = str(integration.kind or "").strip().lower()
+        if kind == "cex":
+            exchange_code = str(integration.exchange_code or "").strip().lower()
+            if exchange_code:
+                allowed_services.add(exchange_code)
+            continue
+        if kind == "dex":
+            wallet_address = str(integration.wallet_address or "").strip()
+            if wallet_address:
+                allowed_services.add(IntegrationService._wallet_service_name(wallet_address))
+                allowed_services.add(okx_wallet_service.legacy_service_name_for(wallet_address))
 
     services = []
     total_usd = 0.0
 
     for balance in balances:
+        if balance.service not in allowed_services:
+            continue
+        if not settings.is_service_enabled(balance.service):
+            continue
         assets = [AssetSchema(**a) for a in (balance.assets or [])]
 
         accounts = []
@@ -79,6 +122,7 @@ async def get_cached_balances(
                 )
 
         svc_balance = ServiceBalanceSchema(
+            integration_id=balance.integration_id,
             service=balance.service,
             accounts=accounts,
             assets=assets,
@@ -137,6 +181,7 @@ async def refresh_balances(
 @router.get("/history", response_model=HistoryResponse)
 async def get_history(
     service: Optional[str] = Query(None, description="Filter by service name"),
+    integration_id: Optional[int] = Query(None, description="Filter by integration id"),
     start_date: Optional[datetime] = Query(None, description="Start date filter"),
     end_date: Optional[datetime] = Query(None, description="End date filter"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
@@ -149,23 +194,36 @@ async def get_history(
     entries = await repo.get_history(
         organization_id=organization_id,
         service=service,
+        integration_id=integration_id,
         start_date=start_date,
         end_date=end_date,
         limit=limit,
+        order="desc",
     )
 
     total_count = await repo.get_history_count(
         organization_id=organization_id,
         service=service,
+        integration_id=integration_id,
         start_date=start_date,
         end_date=end_date,
     )
 
     history_entries = [
         HistoryEntrySchema(
+            integration_id=getattr(entry, "integration_id", None),
             service=entry.service,
             total_usd=entry.total_usd,
-            assets=[AssetSchema(**a) for a in entry.assets],
+            assets=[AssetSchema(**a) for a in (entry.assets or [])],
+            accounts=[
+                AccountBalanceSchema(
+                    account_type=acc.get("account_type", "spot"),
+                    assets=[AssetSchema(**a) for a in acc.get("assets", [])],
+                    total_usd=acc.get("total_usd", 0),
+                )
+                for acc in (entry.accounts or [])
+            ],
+            actual=bool(getattr(entry, "actual", True)),
             created_at=entry.created_at,
         )
         for entry in entries
@@ -175,6 +233,81 @@ async def get_history(
         service=service,
         entries=history_entries,
         total_entries=total_count,
+    )
+
+
+@router.get("/history/chart", response_model=HistoryChartResponse)
+async def get_history_chart(
+    service: Optional[str] = Query(None, description="Filter by service name"),
+    integration_id: Optional[int] = Query(None, description="Filter by integration id"),
+    start_date: Optional[datetime] = Query(None, description="Start date filter"),
+    end_date: Optional[datetime] = Query(None, description="End date filter"),
+    interval: str = Query("hour", pattern="^(hour|day)$"),
+    fill: str = Query("forward", pattern="^(forward|none)$"),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
+    db: AsyncSession = Depends(get_db),
+    organization_id: int = Depends(get_current_organization_id),
+    _: object = Depends(require_role("viewer")),
+):
+    repo = BalanceRepository(db)
+    now = datetime.now(timezone.utc)
+    effective_end = end_date or now
+    effective_start = start_date or (effective_end - timedelta(days=1 if interval == "hour" else 30))
+
+    points = await repo.get_history_points(
+        organization_id=organization_id,
+        service=service,
+        integration_id=integration_id,
+        start_date=effective_start,
+        end_date=effective_end,
+    )
+
+    by_bucket: dict[datetime, object] = {}
+    for entry in points:
+        bucket = _floor_bucket(entry.created_at, interval)
+        by_bucket[bucket] = entry
+
+    chart_points: list[ChartPointSchema] = []
+    cursor = _floor_bucket(effective_start, interval)
+    end_bucket = _floor_bucket(effective_end, interval)
+    last_seen = None
+
+    while cursor <= end_bucket:
+        entry = by_bucket.get(cursor)
+        if entry is not None:
+            last_seen = entry
+            chart_points.append(
+                ChartPointSchema(
+                    bucket_start=cursor,
+                    bucket_end=_next_bucket(cursor, interval),
+                    total_usd=float(entry.total_usd),
+                    actual=bool(getattr(entry, "actual", True)),
+                    point_type="observed",
+                )
+            )
+        elif fill == "forward" and last_seen is not None:
+            chart_points.append(
+                ChartPointSchema(
+                    bucket_start=cursor,
+                    bucket_end=_next_bucket(cursor, interval),
+                    total_usd=float(last_seen.total_usd),
+                    actual=bool(getattr(last_seen, "actual", False)),
+                    point_type="filled",
+                )
+            )
+        elif fill == "none":
+            pass
+        cursor = _next_bucket(cursor, interval)
+
+    if order == "desc":
+        chart_points = list(reversed(chart_points))
+
+    return HistoryChartResponse(
+        service=service,
+        interval=interval,
+        fill=fill,
+        order=order,
+        points=chart_points,
     )
 
 
@@ -196,6 +329,23 @@ async def get_dashboard_summary(
 ):
     balance_repo = BalanceRepository(db)
     balances = await balance_repo.get_all_latest_balances(organization_id=organization_id)
+    active_integrations = await IntegrationService(db).list_integrations(
+        organization_id=organization_id,
+        include_inactive=False,
+    )
+    allowed_services: set[str] = set()
+    for integration in active_integrations:
+        kind = str(integration.kind or "").strip().lower()
+        if kind == "cex":
+            exchange_code = str(integration.exchange_code or "").strip().lower()
+            if exchange_code:
+                allowed_services.add(exchange_code)
+            continue
+        if kind == "dex":
+            wallet_address = str(integration.wallet_address or "").strip()
+            if wallet_address:
+                allowed_services.add(IntegrationService._wallet_service_name(wallet_address))
+                allowed_services.add(okx_wallet_service.legacy_service_name_for(wallet_address))
 
     total_usd = 0.0
     spot_total = 0.0
@@ -205,6 +355,10 @@ async def get_dashboard_summary(
     latest_updated_at: datetime | None = None
 
     for balance in balances:
+        if balance.service not in allowed_services:
+            continue
+        if not settings.is_service_enabled(balance.service):
+            continue
         total_usd += float(balance.total_usd)
         updated_at = balance.updated_at
         if latest_updated_at is None or updated_at > latest_updated_at:
@@ -284,6 +438,7 @@ async def get_dashboard_summary(
         futures_total=futures_total,
         dex_total=dex_total,
         freshness=freshness,
+        latest_updated_at=latest_updated_at,
         plan=entitlements.get("plan", {}),
         capabilities=entitlements.get("capabilities", {}),
         throttling=entitlements.get("throttling", {}),
@@ -318,6 +473,7 @@ async def get_health(
             last_check=status.last_check,
         )
         for status in statuses
+        if settings.is_service_enabled(status.service)
     ]
 
     total = len(service_health)

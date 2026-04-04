@@ -91,3 +91,15 @@ def require_role(min_role: str):
         return identity
 
     return _checker
+
+
+async def require_platform_admin(
+    identity: IdentityContext = Depends(get_identity_context),
+) -> IdentityContext:
+    telegram_user_id = getattr(identity.user, "telegram_user_id", None)
+    if telegram_user_id != settings.telegram_admin_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform admin access required",
+        )
+    return identity

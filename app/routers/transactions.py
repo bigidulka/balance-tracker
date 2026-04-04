@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 @router.get("", response_model=TransactionListResponse)
 async def get_transactions(
     service: Optional[str] = Query(None, description="Filter by service/exchange name"),
+    integration_id: Optional[int] = Query(None, description="Filter by integration id"),
     tx_type: Optional[str] = Query(
         None, description="Filter by type: deposit or withdrawal"
     ),
@@ -44,6 +45,7 @@ async def get_transactions(
     tx_service = TransactionService(db, organization_id=organization_id)
     return await tx_service.get_transactions(
         service=service,
+        integration_id=integration_id,
         tx_type=tx_type,
         status=status,
         start_date=start_date,
@@ -56,6 +58,7 @@ async def get_transactions(
 @router.get("/deposits", response_model=TransactionListResponse)
 async def get_deposits(
     service: Optional[str] = Query(None, description="Filter by service/exchange name"),
+    integration_id: Optional[int] = Query(None, description="Filter by integration id"),
     status: Optional[str] = Query(None, description="Filter by status"),
     start_date: Optional[datetime] = Query(None, description="Start date filter"),
     end_date: Optional[datetime] = Query(None, description="End date filter"),
@@ -68,6 +71,7 @@ async def get_deposits(
     tx_service = TransactionService(db, organization_id=organization_id)
     return await tx_service.get_transactions(
         service=service,
+        integration_id=integration_id,
         tx_type="deposit",
         status=status,
         start_date=start_date,
@@ -80,6 +84,7 @@ async def get_deposits(
 @router.get("/withdrawals", response_model=TransactionListResponse)
 async def get_withdrawals(
     service: Optional[str] = Query(None, description="Filter by service/exchange name"),
+    integration_id: Optional[int] = Query(None, description="Filter by integration id"),
     status: Optional[str] = Query(None, description="Filter by status"),
     start_date: Optional[datetime] = Query(None, description="Start date filter"),
     end_date: Optional[datetime] = Query(None, description="End date filter"),
@@ -92,6 +97,7 @@ async def get_withdrawals(
     tx_service = TransactionService(db, organization_id=organization_id)
     return await tx_service.get_transactions(
         service=service,
+        integration_id=integration_id,
         tx_type="withdrawal",
         status=status,
         start_date=start_date,
