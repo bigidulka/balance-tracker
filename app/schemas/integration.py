@@ -42,11 +42,20 @@ class IntegrationResponse(BaseModel):
     provider: str
     name: str
     kind: str
+    status: str | None = None
     exchange_code: str | None = None
     account_ref: str | None = None
     wallet_address: str | None = None
     chain: str | None = None
     is_active: bool
+    last_synced_at: datetime | None = None
+    is_healthy: bool | None = None
+    health_status: str | None = None
+    last_error: str | None = None
+    last_check: datetime | None = None
+    last_job_status: str | None = None
+    last_job_error: str | None = None
+    last_job_finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

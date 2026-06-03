@@ -1180,6 +1180,21 @@ def transaction_detail(
     return builder.as_markup()
 
 
+def _integration_button_status(item: dict[str, object], *, locale: str) -> str:
+    if not bool(item.get("is_active")):
+        return t(locale, "off")
+    health = str(item.get("health_status") or "").strip().lower()
+    if health == "problem":
+        return t(locale, "integration_problem")
+    if health == "warning":
+        return t(locale, "integration_warning")
+    if health == "ok":
+        return t(locale, "integration_ok")
+    if health == "unknown":
+        return t(locale, "unknown")
+    return t(locale, "on")
+
+
 def integrations(
     items: list[dict[str, object]],
     rev: int,
@@ -1200,7 +1215,7 @@ def integrations(
             or item.get("name")
             or f"integration-{integration_id}"
         )
-        status = t(locale, "on") if bool(item.get("is_active")) else t(locale, "off")
+        status = _integration_button_status(item, locale=locale)
         exchange_emoji_id = resolve_exchange_emoji_id(
             str(item.get("exchange_code") or item.get("provider") or name)
         )

@@ -5,7 +5,15 @@ from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
-from app.models.balance import Balance, BalanceHistory, Integration, Organization, Transaction
+from app.models.balance import (
+    Balance,
+    BalanceHistory,
+    Integration,
+    Organization,
+    ServiceStatus,
+    SyncJob,
+    Transaction,
+)
 from app.routers.balances import (
     _day_start_for_offset,
     get_dashboard_summary,
@@ -15,6 +23,7 @@ from app.routers.balances import (
 from app.routers.integrations import (
     activate_integration,
     deactivate_integration,
+    list_integrations,
     refresh_integration,
 )
 
@@ -255,6 +264,31 @@ class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=user_id),
         )
 
+    @staticmethod
+    def _integration_response_keys() -> set[str]:
+        return {
+            "id",
+            "provider",
+            "name",
+            "kind",
+            "status",
+            "exchange_code",
+            "account_ref",
+            "wallet_address",
+            "chain",
+            "is_active",
+            "last_synced_at",
+            "is_healthy",
+            "health_status",
+            "last_error",
+            "last_check",
+            "last_job_status",
+            "last_job_error",
+            "last_job_finished_at",
+            "created_at",
+            "updated_at",
+        }
+
     async def test_integration_lifecycle_endpoint_shapes_are_stable(self):
         async with self.session_maker() as session:
             org = Organization(name="Lifecycle Contract Org", slug="lifecycle-contract-org")
@@ -284,20 +318,7 @@ class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
             )
             deactivated_payload = deactivated.model_dump()
             self.assertEqual(
-                set(deactivated_payload.keys()),
-                {
-                    "id",
-                    "provider",
-                    "name",
-                    "kind",
-                    "exchange_code",
-                    "account_ref",
-                    "wallet_address",
-                    "chain",
-                    "is_active",
-                    "created_at",
-                    "updated_at",
-                },
+                set(deactivated_payload.keys()), self._integration_response_keys()
             )
             self.assertFalse(deactivated.is_active)
 
@@ -324,6 +345,88 @@ class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refresh.integration_id, integration.id)
             self.assertGreater(refresh.job_id, 0)
             self.assertIn(refresh.job_status, {"queued", "running"})
+
+    async def test_integration_list_exposes_health_from_status_and_latest_job(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Health Contract Org", slug="health-contract-org")
+            session.add(org)
+            await session.flush()
+
+            now = datetime.now(timezone.utc)
+            okx = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="OKX main",
+                kind="cex",
+                exchange_code="okx",
+                account_ref="main",
+                is_active=True,
+                status="active",
+            )
+            gate = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="Gate.io main",
+                kind="cex",
+                exchange_code="gateio",
+                account_ref="main",
+                is_active=True,
+                status="active",
+                last_synced_at=now - timedelta(minutes=30),
+            )
+            session.add_all([okx, gate])
+            await session.flush()
+            session.add_all(
+                [
+                    ServiceStatus(
+                        organization_id=org.id,
+                        service="okx",
+                        is_healthy=False,
+                        last_error="Degraded balance payload",
+                    ),
+                    ServiceStatus(
+                        organization_id=org.id,
+                        service="gateio",
+                        is_healthy=True,
+                    ),
+                    SyncJob(
+                        organization_id=org.id,
+                        integration_id=okx.id,
+                        status="failed",
+                        error_message="401 Unauthorized",
+                        queued_at=now - timedelta(minutes=3),
+                        finished_at=now - timedelta(minutes=2),
+                    ),
+                    SyncJob(
+                        organization_id=org.id,
+                        integration_id=gate.id,
+                        status="failed",
+                        error_message="",
+                        queued_at=now - timedelta(minutes=3),
+                        finished_at=now - timedelta(minutes=2),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            response = await list_integrations(
+                include_inactive=True,
+                db=session,
+                identity=self._identity(org.id),
+            )
+            payload = {item.exchange_code: item.model_dump() for item in response}
+
+            self.assertEqual(
+                set(payload["okx"].keys()), self._integration_response_keys()
+            )
+            self.assertEqual(payload["okx"]["health_status"], "problem")
+            self.assertEqual(payload["okx"]["is_healthy"], False)
+            self.assertEqual(payload["okx"]["last_job_status"], "failed")
+            self.assertIn("401", payload["okx"]["last_error"])
+
+            self.assertEqual(payload["gateio"]["health_status"], "warning")
+            self.assertEqual(payload["gateio"]["is_healthy"], True)
+            self.assertEqual(payload["gateio"]["last_job_status"], "failed")
 
 
 class HistoryContractTests(unittest.IsolatedAsyncioTestCase):
