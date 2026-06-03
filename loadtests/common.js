@@ -1,5 +1,16 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { Trend } from 'k6/metrics';
+
+const endpointDurations = {
+  balances_cached: new Trend('endpoint_duration_balances_cached', true),
+  dashboard_summary: new Trend('endpoint_duration_dashboard_summary', true),
+  dashboard_summary_metrics: new Trend('endpoint_duration_dashboard_summary_metrics', true),
+  transactions_list: new Trend('endpoint_duration_transactions_list', true),
+  health: new Trend('endpoint_duration_health', true),
+  balances_force_refresh: new Trend('endpoint_duration_balances_force_refresh', true),
+  transactions_refresh: new Trend('endpoint_duration_transactions_refresh', true),
+};
 
 const DEFAULT_HEADERS = {
   'Content-Type': 'application/json',
@@ -75,21 +86,31 @@ export function defaultParams(endpointName, organizationId) {
   };
 }
 
+function recordEndpointDuration(endpointName, response) {
+  const trend = endpointDurations[endpointName];
+  if (trend) {
+    trend.add(response.timings.duration);
+  }
+}
+
 export function runReadPathSuite() {
   const orgId = pickOrganizationId(__VU, __ITER);
 
   const balancesUrl = `${cfg.baseUrl}/api/v1/balances/cached`;
   const balancesResp = http.get(balancesUrl, defaultParams('balances_cached', orgId));
+  recordEndpointDuration('balances_cached', balancesResp);
   check(balancesResp, {
     'balances/cached status is 200': (r) => r.status === 200,
   });
 
   const includeMetrics = Math.random() < cfg.dashboardMetricsRatio;
   const dashboardUrl = `${cfg.baseUrl}/api/v1/dashboard/summary?include_metrics=${includeMetrics ? 'true' : 'false'}&utc_offset_minutes=${cfg.dashboardUtcOffsetMinutes}`;
+  const dashboardEndpoint = includeMetrics ? 'dashboard_summary_metrics' : 'dashboard_summary';
   const dashboardResp = http.get(
     dashboardUrl,
-    defaultParams(includeMetrics ? 'dashboard_summary_metrics' : 'dashboard_summary', orgId),
+    defaultParams(dashboardEndpoint, orgId),
   );
+  recordEndpointDuration(dashboardEndpoint, dashboardResp);
   check(dashboardResp, {
     'dashboard/summary status is 200': (r) => r.status === 200,
   });
@@ -97,12 +118,14 @@ export function runReadPathSuite() {
   const txOffset = (__ITER % 20) * 50;
   const txUrl = `${cfg.baseUrl}/api/v1/transactions?limit=50&offset=${txOffset}`;
   const txResp = http.get(txUrl, defaultParams('transactions_list', orgId));
+  recordEndpointDuration('transactions_list', txResp);
   check(txResp, {
     'transactions status is 200': (r) => r.status === 200,
   });
 
   const healthUrl = `${cfg.baseUrl}/api/v1/health`;
   const healthResp = http.get(healthUrl, defaultParams('health', orgId));
+  recordEndpointDuration('health', healthResp);
   check(healthResp, {
     'health status is 200': (r) => r.status === 200,
   });
@@ -110,6 +133,7 @@ export function runReadPathSuite() {
   if (Math.random() < cfg.forceRefreshRatio) {
     const refreshUrl = `${cfg.baseUrl}/api/v1/balances?force_refresh=true`;
     const refreshResp = http.get(refreshUrl, defaultParams('balances_force_refresh', orgId));
+    recordEndpointDuration('balances_force_refresh', refreshResp);
     check(refreshResp, {
       'balances force refresh status is 200': (r) => r.status === 200,
     });
@@ -118,6 +142,7 @@ export function runReadPathSuite() {
   if (cfg.enableMutatingEndpoints && Math.random() < 0.02) {
     const refreshTxUrl = `${cfg.baseUrl}/api/v1/transactions/refresh?since_hours=24`;
     const txRefreshResp = http.post(refreshTxUrl, null, defaultParams('transactions_refresh', orgId));
+    recordEndpointDuration('transactions_refresh', txRefreshResp);
     check(txRefreshResp, {
       'transactions refresh status is 200': (r) => r.status === 200,
     });
