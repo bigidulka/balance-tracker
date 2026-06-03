@@ -280,7 +280,7 @@ class APIClient:
             resp.raise_for_status()
             return await resp.json()
 
-    async def get_dashboard_summary(self) -> Dict[str, Any]:
+    async def get_dashboard_summary(self, *, include_metrics: bool = False) -> Dict[str, Any]:
         if self.no_backend_ui_mode:
             payload = deepcopy(_MOCK_DASHBOARD_SUMMARY)
             payload["freshness"] = (
@@ -291,7 +291,8 @@ class APIClient:
 
         session = await self._get_session()
         params = self._add_org_param()
-        params["include_metrics"] = "true"
+        if include_metrics:
+            params["include_metrics"] = "true"
         async with session.get(
             f"{settings.api_url}/api/v1/dashboard/summary",
             headers=self._build_headers(),
