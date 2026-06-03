@@ -1,10 +1,12 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import IdentityContext, require_role
+from app.models.balance import ServiceStatus, SyncJob
 from app.schemas.integration import (
     IntegrationCreateRequest,
     IntegrationRefreshResponse,
@@ -28,17 +30,135 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/integrations", tags=["integrations"])
 
 
-def _to_response(integration) -> IntegrationResponse:
+def _service_key_for_integration(integration) -> str:
+    if integration.kind == "cex" and integration.exchange_code:
+        return str(integration.exchange_code).strip().lower()
+    if integration.chain:
+        return str(integration.chain).strip().lower()
+    return str(integration.provider or "").strip().lower()
+
+
+def _health_status(integration, service_status=None, latest_job=None) -> str:
+    if not integration.is_active:
+        return "inactive"
+
+    last_job_status = str(getattr(latest_job, "status", "") or "").lower()
+    latest_failed = last_job_status == "failed"
+    service_unhealthy = (
+        service_status is not None
+        and getattr(service_status, "is_healthy", None) is False
+    )
+    never_synced = integration.last_synced_at is None
+
+    if service_unhealthy or (latest_failed and never_synced):
+        return "problem"
+    if latest_failed:
+        return "warning"
+    if never_synced:
+        return "unknown"
+    return "ok"
+
+
+async def _service_statuses_by_key(
+    db: AsyncSession, organization_id: int, integrations
+) -> dict[str, ServiceStatus]:
+    service_keys = {
+        _service_key_for_integration(integration)
+        for integration in integrations
+        if _service_key_for_integration(integration)
+    }
+    if not service_keys:
+        return {}
+    result = await db.execute(
+        select(ServiceStatus).where(
+            ServiceStatus.organization_id == organization_id,
+            ServiceStatus.service.in_(service_keys),
+        )
+    )
+    return {
+        str(status.service or "").strip().lower(): status
+        for status in result.scalars()
+    }
+
+
+async def _latest_jobs_by_integration(
+    db: AsyncSession, organization_id: int, integrations
+) -> dict[int, SyncJob]:
+    integration_ids = [integration.id for integration in integrations]
+    if not integration_ids:
+        return {}
+
+    ranked_jobs = (
+        select(
+            SyncJob.id.label("id"),
+            SyncJob.integration_id.label("integration_id"),
+            func.row_number()
+            .over(
+                partition_by=SyncJob.integration_id,
+                order_by=(
+                    SyncJob.finished_at.desc().nulls_last(),
+                    SyncJob.queued_at.desc(),
+                    SyncJob.id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(
+            SyncJob.organization_id == organization_id,
+            SyncJob.integration_id.in_(integration_ids),
+        )
+        .subquery()
+    )
+    result = await db.execute(
+        select(SyncJob)
+        .join(ranked_jobs, SyncJob.id == ranked_jobs.c.id)
+        .where(ranked_jobs.c.rank == 1)
+    )
+    return {
+        int(job.integration_id): job
+        for job in result.scalars()
+        if job.integration_id
+    }
+
+
+def _to_response(
+    integration, service_status=None, latest_job=None
+) -> IntegrationResponse:
+    last_job_error = getattr(latest_job, "error_message", None) if latest_job else None
+    service_error = (
+        getattr(service_status, "last_error", None)
+        if service_status is not None
+        else None
+    )
     return IntegrationResponse(
         id=integration.id,
         provider=integration.provider,
         name=integration.name,
         kind=integration.kind,
+        status=integration.status,
         exchange_code=integration.exchange_code,
         account_ref=integration.account_ref,
         wallet_address=integration.wallet_address,
         chain=integration.chain,
         is_active=integration.is_active,
+        last_synced_at=integration.last_synced_at,
+        is_healthy=(
+            getattr(service_status, "is_healthy", None)
+            if service_status is not None
+            else None
+        ),
+        health_status=_health_status(integration, service_status, latest_job),
+        last_error=last_job_error or service_error,
+        last_check=(
+            getattr(service_status, "last_check", None)
+            if service_status is not None
+            else None
+        ),
+        last_job_status=getattr(latest_job, "status", None) if latest_job else None,
+        last_job_error=last_job_error,
+        last_job_finished_at=(
+            getattr(latest_job, "finished_at", None) if latest_job else None
+        ),
         created_at=integration.created_at,
         updated_at=integration.updated_at,
     )
@@ -55,7 +175,20 @@ async def list_integrations(
         identity.organization.id,
         include_inactive=include_inactive,
     )
-    return [_to_response(integration) for integration in integrations]
+    service_statuses = await _service_statuses_by_key(
+        db, identity.organization.id, integrations
+    )
+    latest_jobs = await _latest_jobs_by_integration(
+        db, identity.organization.id, integrations
+    )
+    return [
+        _to_response(
+            integration,
+            service_statuses.get(_service_key_for_integration(integration)),
+            latest_jobs.get(integration.id),
+        )
+        for integration in integrations
+    ]
 
 
 @router.post("/verify", response_model=IntegrationVerifyResponse)

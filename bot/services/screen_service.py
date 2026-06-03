@@ -1656,18 +1656,20 @@ class ScreenService:
             for svc in (balances.get("services") or [])
             if isinstance(svc, dict) and not bool(svc.get("actual", False))
         }
-        # Enrich every item with display_name once — used by both text and keyboard
-        enriched = [
-            dict(
-                item,
-                display_name=(
-                    f"{self._display_name_for_integration(item)} ⚠️"
-                    if self._service_name_from_integration(item).strip().lower() in stale_services
-                    else self._display_name_for_integration(item)
-                ),
+        # Enrich every item once; text and keyboard must render the same state.
+        enriched = []
+        for item in integrations:
+            service_name = self._service_name_from_integration(item).strip().lower()
+            health_status = str(item.get("health_status") or "").strip().lower()
+            if service_name in stale_services and health_status in {"", "ok", "unknown"}:
+                health_status = "warning"
+            enriched.append(
+                dict(
+                    item,
+                    display_name=self._display_name_for_integration(item),
+                    health_status=health_status or item.get("health_status"),
+                )
             )
-            for item in integrations
-        ]
         text = msg.integrations_text(
             enriched,
             page=page,

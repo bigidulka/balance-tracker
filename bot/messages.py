@@ -627,6 +627,28 @@ def _integration_type_label(item: dict[str, Any]) -> str:
     return _PROVIDER_DISPLAY.get(provider, provider.upper() if provider else "DEX")
 
 
+def _integration_health_label(item: dict[str, Any], *, locale: str) -> str:
+    if not item.get("is_active"):
+        return t(locale, "inactive")
+    health = str(item.get("health_status") or "").strip().lower()
+    if health == "problem":
+        return t(locale, "integration_problem")
+    if health == "warning":
+        return t(locale, "integration_warning")
+    if health == "ok":
+        return t(locale, "integration_ok")
+    if health == "unknown":
+        return t(locale, "unknown")
+    return t(locale, "active")
+
+
+def _short_value(value: Any, *, limit: int = 180) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
 def integrations_text(
     items: list[dict[str, Any]],
     *,
@@ -646,7 +668,7 @@ def integrations_text(
     lines = [
         Text(
             f"{(item.get('display_name') or item.get('name') or ('integration-' + str(item.get('id', '?'))))} [{_integration_type_label(item)}]"
-            f" - {t(locale, 'active') if item.get('is_active') else t(locale, 'inactive')}"
+            f" - {_integration_health_label(item, locale=locale)}"
         )
         for item in page_items
     ]
@@ -779,7 +801,13 @@ def integration_detail_text(
             t(locale, "state"),
             t(locale, "active") if item.get("is_active") else t(locale, "inactive"),
         ),
+        (t(locale, "health"), _integration_health_label(item, locale=locale)),
     ]
+    if item.get("last_synced_at"):
+        status_pairs.append((t(locale, "last_sync"), str(item.get("last_synced_at"))))
+    last_error = item.get("last_job_error") or item.get("last_error")
+    if last_error:
+        status_pairs.append((t(locale, "error"), _short_value(last_error)))
     if job_id is not None:
         status_pairs.append((t(locale, "refresh"), str(job_id)))
 
