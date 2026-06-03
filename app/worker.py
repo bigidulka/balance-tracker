@@ -33,9 +33,10 @@ async def _ensure_defaults() -> None:
             await entitlements.ensure_default_subscription(organization.id)
 
 
-async def worker_loop() -> None:
+async def worker_loop(worker_id: int) -> None:
     logger.info(
-        "Sync worker started, poll_interval=%ss, enabled=%s",
+        "Sync worker %s started, poll_interval=%ss, enabled=%s",
+        worker_id,
         settings.sync_worker_poll_interval_seconds,
         settings.inprocess_sync_worker_enabled,
     )
@@ -46,10 +47,11 @@ async def worker_loop() -> None:
                 job = await RefreshOrchestrator(db).run_next_job()
                 if job is not None:
                     logger.info(
-                        "Processed sync job id=%s organization_id=%s status=%s",
+                        "Processed sync job id=%s organization_id=%s status=%s worker_id=%s",
                         job.id,
                         job.organization_id,
                         job.status,
+                        worker_id,
                     )
 
             if job is None:
@@ -57,7 +59,7 @@ async def worker_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("Worker loop error: %s", exc)
+            logger.exception("Worker %s loop error: %s", worker_id, exc)
             await asyncio.sleep(settings.sync_worker_poll_interval_seconds)
 
 
@@ -71,9 +73,19 @@ async def main() -> None:
     await init_db()
     await _ensure_defaults()
 
+    worker_count = max(1, settings.job_parallelism)
+    logger.info("Starting %s sync worker loop(s)", worker_count)
+    tasks = [asyncio.create_task(worker_loop(worker_id)) for worker_id in range(1, worker_count + 1)]
     try:
-        await worker_loop()
+        await asyncio.gather(*tasks)
     finally:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await ccxt_manager.close_all()
         await okx_wallet_service.close()
         logger.info("Worker shutdown complete")

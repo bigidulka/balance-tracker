@@ -1,13 +1,18 @@
 import asyncio
 import logging
+import os
+from urllib.parse import urlsplit
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
 from bot.config import settings
+
+BOT_PROXY = os.getenv("BOT_PROXY", "").strip()
 from bot.handlers import router
 from bot.api_client import api_client
 from bot.middlewares.context import ContextMiddleware
@@ -42,9 +47,19 @@ async def main():
         logger.error("BOT_TOKEN is not set")
         return
 
+    session: AiohttpSession | None = None
+    if BOT_PROXY:
+        parsed_proxy = urlsplit(BOT_PROXY)
+        proxy_label = parsed_proxy.hostname or "configured"
+        if parsed_proxy.port:
+            proxy_label = f"{proxy_label}:{parsed_proxy.port}"
+        logger.info("Using proxy for bot: %s", proxy_label)
+        session = AiohttpSession(proxy=BOT_PROXY)
+
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
     storage = await _build_storage()
     dp = Dispatcher(storage=storage)
@@ -55,23 +70,23 @@ async def main():
 
     logger.info("Starting bot...")
 
-    # Start notification background tasks
-    _notification_task = asyncio.create_task(
-        notification_loop(bot, interval=settings.notification_interval)
-    )
-    logger.info(
-        "Balance notification loop started (interval: %ss)",
-        settings.notification_interval,
-    )
+    # Notifications temporarily disabled — feature under development.
+    # _notification_task = asyncio.create_task(
+    #     notification_loop(bot, interval=settings.notification_interval)
+    # )
+    # logger.info(
+    #     "Balance notification loop started (interval: %ss)",
+    #     settings.notification_interval,
+    # )
 
     # Start transaction notification background task (check every 2 minutes)
-    tx_interval = max(settings.notification_interval, 120)
-    _tx_notification_task = asyncio.create_task(
-        transaction_notification_loop(bot, interval=tx_interval)
-    )
-    logger.info(f"Transaction notification loop started (interval: {tx_interval}s)")
+    # _tx_notification_task = asyncio.create_task(
+    #     transaction_notification_loop(bot, interval=tx_interval)
+    # )
+    # logger.info(f"Transaction notification loop started (interval: {tx_interval}s)")
 
     try:
+
         await dp.start_polling(bot)
     finally:
         # Cancel notification tasks

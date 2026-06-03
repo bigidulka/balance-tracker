@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     proxy_port: int = Field(default=3128)
     proxy_username: str = Field(default="")
     proxy_password: str = Field(default="")
+    bot_proxy: str = Field(default="")
+    outbound_proxy_url: str = Field(default="")
 
     binance_api_key: str = Field(default="")
     binance_secret: str = Field(default="")
@@ -113,6 +115,10 @@ class Settings(BaseSettings):
     exchange_parallelism: int = Field(default=8)
     job_parallelism: int = Field(default=2)
     background_refresh_poll_interval_seconds: float = Field(default=5.0)
+    enable_refresh_scheduler: bool = Field(default=False)
+    refresh_scheduler_poll_interval_seconds: float = Field(default=30.0)
+    refresh_scheduler_min_interval_seconds: int = Field(default=60)
+    refresh_scheduler_batch_size: int = Field(default=20)
 
     # Legacy aliases kept for backward compatibility during rollout.
     enable_legacy_background_refresh_loop: Optional[bool] = Field(default=None)
@@ -156,6 +162,9 @@ class Settings(BaseSettings):
 
     @property
     def proxy_url(self) -> Optional[str]:
+        explicit = str(self.outbound_proxy_url or self.bot_proxy or "").strip()
+        if explicit:
+            return explicit
         if self.proxy_host and self.proxy_username:
             return f"http://{self.proxy_username}:{self.proxy_password}@{self.proxy_host}:{self.proxy_port}"
         elif self.proxy_host:

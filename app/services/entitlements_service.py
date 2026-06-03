@@ -28,7 +28,8 @@ def _make_policy(
             "max_integrations": total_integrations,
             "max_accounts_per_exchange": 0,
             "max_cex_accounts": max(0, max_cex_accounts),
-            "max_evm_wallets": max(0, max_evm_wallets),
+            "max_wallets": max(0, max_evm_wallets),
+            "max_evm_wallets": max(0, max_evm_wallets),  # legacy alias
             "min_refresh_interval_seconds": clamped,
         },
         "background": {
@@ -156,21 +157,21 @@ class EntitlementsService:
                 {
                     "code": "low",
                     "name": "Low",
-                    "price_monthly": 0.0,
+                    "price_monthly": 5.0,
                     "currency": "USD",
                     "policy": cls._copy_policy(cls.LOW_POLICY),
                 },
                 {
                     "code": "medium",
                     "name": "Medium",
-                    "price_monthly": 0.0,
+                    "price_monthly": 10.0,
                     "currency": "USD",
                     "policy": cls._copy_policy(cls.MEDIUM_POLICY),
                 },
                 {
                     "code": "pro",
                     "name": "Pro",
-                    "price_monthly": 0.0,
+                    "price_monthly": 20.0,
                     "currency": "USD",
                     "policy": cls._copy_policy(cls.PRO_POLICY),
                 },
@@ -207,7 +208,8 @@ class EntitlementsService:
                 legacy_max_integrations,
             )
             max_evm_wallets = cls._safe_int(
-                policy_limits.get("max_evm_wallets"),
+                policy_limits.get("max_wallets")
+                or policy_limits.get("max_evm_wallets"),
                 0,
             )
             refresh_interval_seconds = cls._safe_int(
@@ -266,6 +268,9 @@ class EntitlementsService:
                 or plan.min_refresh_interval_seconds
                 != definition["min_refresh_interval_seconds"]
                 or plan.policy_json != definition["policy_json"]
+                or float(plan.price_monthly or 0.0)
+                != float(definition["price_monthly"])
+                or (plan.currency or "USD") != definition["currency"]
                 or not plan.is_active
             ):
                 plan.name = definition["name"]
@@ -274,6 +279,8 @@ class EntitlementsService:
                     "min_refresh_interval_seconds"
                 ]
                 plan.policy_json = definition["policy_json"]
+                plan.price_monthly = float(definition["price_monthly"])
+                plan.currency = definition["currency"]
                 plan.is_active = True
                 changed = True
 
@@ -424,10 +431,14 @@ class EntitlementsService:
             policy["limits"].get("max_cex_accounts"),
             policy["limits"]["max_integrations"],
         )
-        policy["limits"]["max_evm_wallets"] = cls._safe_int(
-            policy["limits"].get("max_evm_wallets"),
+        policy["limits"]["max_wallets"] = cls._safe_int(
+            policy["limits"].get("max_wallets")
+            or policy["limits"].get("max_evm_wallets"),
             0,
         )
+        policy["limits"]["max_evm_wallets"] = policy["limits"][
+            "max_wallets"
+        ]  # legacy alias
         policy["limits"]["max_accounts_per_exchange"] = cls._safe_int(
             policy["limits"].get("max_accounts_per_exchange"),
             0,
@@ -469,11 +480,15 @@ class EntitlementsService:
                         policy["limits"]["max_cex_accounts"],
                     )
                     cex_limit_explicit = True
-                if "max_evm_wallets" in raw_limits:
-                    policy["limits"]["max_evm_wallets"] = cls._safe_int(
-                        raw_limits.get("max_evm_wallets"),
-                        policy["limits"]["max_evm_wallets"],
+                if "max_wallets" in raw_limits or "max_evm_wallets" in raw_limits:
+                    policy["limits"]["max_wallets"] = cls._safe_int(
+                        raw_limits.get("max_wallets")
+                        or raw_limits.get("max_evm_wallets"),
+                        policy["limits"]["max_wallets"],
                     )
+                    policy["limits"]["max_evm_wallets"] = policy["limits"][
+                        "max_wallets"
+                    ]  # legacy alias
                     evm_limit_explicit = True
                 if "max_accounts_per_exchange" in raw_limits:
                     policy["limits"]["max_accounts_per_exchange"] = cls._safe_int(
@@ -554,7 +569,8 @@ class EntitlementsService:
                 "max_integrations", 0
             )
         if not evm_limit_explicit:
-            policy["limits"]["max_evm_wallets"] = 0
+            policy["limits"]["max_wallets"] = 0
+            policy["limits"]["max_evm_wallets"] = 0  # legacy alias
         if throttling_refresh_explicit and not background_refresh_explicit:
             policy["background"]["refresh_interval_seconds"] = policy["throttling"][
                 "min_refresh_interval_seconds"
@@ -584,7 +600,7 @@ class EntitlementsService:
         policy["limits"]["max_integrations"] = max(
             policy["limits"].get("max_integrations", 0),
             policy["limits"].get("max_cex_accounts", 0)
-            + policy["limits"].get("max_evm_wallets", 0),
+            + policy["limits"].get("max_wallets", 0),
         )
 
         return policy
@@ -640,11 +656,13 @@ class EntitlementsService:
             kind="dex",
             chain_not_in=self.EVM_CHAIN_WHITELIST,
         )
+        wallets_active = evm_active + non_evm_active
         return {
             "cex": cex_active,
             "evm": evm_active,
             "non_evm_dex": non_evm_active,
-            "integrations": cex_active + evm_active,
+            "wallets": wallets_active,
+            "integrations": cex_active + wallets_active,
         }
 
     @staticmethod
@@ -698,7 +716,11 @@ class EntitlementsService:
 
         allow_dex = policy["features"].get("allow_dex", False)
         max_cex_accounts = int(policy["limits"].get("max_cex_accounts") or 0)
-        max_evm_wallets = int(policy["limits"].get("max_evm_wallets") or 0)
+        max_wallets = int(
+            policy["limits"].get("max_wallets")
+            or policy["limits"].get("max_evm_wallets")
+            or 0
+        )
         max_accounts_per_exchange = int(
             policy["limits"].get("max_accounts_per_exchange") or 0
         )
@@ -750,24 +772,20 @@ class EntitlementsService:
                     )
             return
 
-        if normalized_kind == "dex" and self._is_evm_chain(normalized_chain):
-            current_evm_wallets = await self._get_active_integration_count(
+        if normalized_kind == "dex":
+            current_wallets = await self._get_active_integration_count(
                 organization_id,
                 kind="dex",
-                chain_in=self.EVM_CHAIN_WHITELIST,
             )
-            if max_evm_wallets > 0 and current_evm_wallets >= max_evm_wallets:
+            if max_wallets > 0 and current_wallets >= max_wallets:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "code": "evm_wallet_limit_reached",
-                        "message": f"Plan limit reached: max {max_evm_wallets} EVM wallets",
-                        "policy": {"max_evm_wallets": max_evm_wallets},
+                        "code": "wallet_limit_reached",
+                        "message": f"Plan limit reached: max {max_wallets} wallets",
+                        "policy": {"max_wallets": max_wallets},
                     },
                 )
-            return
-
-        if normalized_kind == "dex":
             return
 
     async def get_latest_successful_refresh_at(
@@ -832,26 +850,32 @@ class EntitlementsService:
 
         usage = await self._get_active_usage(organization_id)
         cex_limit = int(policy["limits"].get("max_cex_accounts") or 0)
-        evm_limit = int(policy["limits"].get("max_evm_wallets") or 0)
+        wallet_limit = int(
+            policy["limits"].get("max_wallets")
+            or policy["limits"].get("max_evm_wallets")
+            or 0
+        )
         total_limit = int(
-            policy["limits"].get("max_integrations") or (cex_limit + evm_limit)
+            policy["limits"].get("max_integrations") or (cex_limit + wallet_limit)
         )
         last_refresh_at = await self.get_latest_successful_refresh_at(organization_id)
         refresh_state = self._build_refresh_state(
             last_refresh_at=last_refresh_at,
-            min_refresh_interval_seconds=policy["background"][
-                "refresh_interval_seconds"
+            min_refresh_interval_seconds=policy["throttling"][
+                "min_refresh_interval_seconds"
             ],
         )
         allow_dex = policy["features"].get("allow_dex", False)
         cex_remaining = max(cex_limit - usage["cex"], 0) if cex_limit > 0 else 0
-        evm_remaining = max(evm_limit - usage["evm"], 0) if evm_limit > 0 else 0
+        wallet_remaining = (
+            max(wallet_limit - usage["wallets"], 0) if wallet_limit > 0 else 0
+        )
         limited_active = usage["integrations"]
         limited_remaining = (
             max(total_limit - limited_active, 0) if total_limit > 0 else 0
         )
         cex_limit_reached = cex_limit > 0 and usage["cex"] >= cex_limit
-        evm_limit_reached = evm_limit > 0 and usage["evm"] >= evm_limit
+        wallet_limit_reached = wallet_limit > 0 and usage["wallets"] >= wallet_limit
 
         resolved_policy = {
             "version": policy["version"],
@@ -864,7 +888,8 @@ class EntitlementsService:
                     "max_accounts_per_exchange"
                 ),
                 "max_cex_accounts": cex_limit,
-                "max_evm_wallets": evm_limit,
+                "max_wallets": wallet_limit,
+                "max_evm_wallets": wallet_limit,  # legacy alias
                 "min_refresh_interval_seconds": policy["background"][
                     "refresh_interval_seconds"
                 ],
@@ -876,11 +901,11 @@ class EntitlementsService:
                 ],
             },
             "throttling": {
-                "min_refresh_interval_seconds": policy["background"][
-                    "refresh_interval_seconds"
+                "min_refresh_interval_seconds": policy["throttling"][
+                    "min_refresh_interval_seconds"
                 ],
-                "background_refresh_interval_seconds": policy["background"][
-                    "refresh_interval_seconds"
+                "background_refresh_interval_seconds": policy["throttling"][
+                    "background_refresh_interval_seconds"
                 ],
                 "retry_after_seconds": refresh_state["retry_after_seconds"],
             },
@@ -893,8 +918,13 @@ class EntitlementsService:
                 },
                 "evm": {
                     "active": usage["evm"],
-                    "remaining": evm_remaining,
-                    "limit_reached": evm_limit_reached,
+                    "remaining": 0,
+                    "limit_reached": False,
+                },
+                "wallets": {
+                    "active": usage["wallets"],
+                    "remaining": wallet_remaining,
+                    "limit_reached": wallet_limit_reached,
                 },
                 "non_evm_dex": {
                     "active": usage["non_evm_dex"],
@@ -919,14 +949,15 @@ class EntitlementsService:
                     "max_accounts_per_exchange"
                 ),
                 "max_cex_accounts": cex_limit,
-                "max_evm_wallets": evm_limit,
+                "max_wallets": wallet_limit,
+                "max_evm_wallets": wallet_limit,  # legacy alias
             },
             "throttling": {
-                "min_refresh_interval_seconds": policy["background"][
-                    "refresh_interval_seconds"
+                "min_refresh_interval_seconds": policy["throttling"][
+                    "min_refresh_interval_seconds"
                 ],
-                "background_refresh_interval_seconds": policy["background"][
-                    "refresh_interval_seconds"
+                "background_refresh_interval_seconds": policy["throttling"][
+                    "background_refresh_interval_seconds"
                 ],
                 "retry_after_seconds": refresh_state["retry_after_seconds"],
             },
@@ -944,8 +975,13 @@ class EntitlementsService:
                 },
                 "evm": {
                     "active": usage["evm"],
-                    "remaining": evm_remaining,
-                    "limit_reached": evm_limit_reached,
+                    "remaining": 0,
+                    "limit_reached": False,
+                },
+                "wallets": {
+                    "active": usage["wallets"],
+                    "remaining": wallet_remaining,
+                    "limit_reached": wallet_limit_reached,
                 },
                 "non_evm_dex": {
                     "active": usage["non_evm_dex"],
@@ -962,7 +998,8 @@ class EntitlementsService:
                 "can_refresh": refresh_state["can_refresh"],
                 "balances_refresh": refresh_state["can_refresh"],
                 "can_add_cex": not cex_limit_reached,
-                "can_add_evm": allow_dex and not evm_limit_reached,
+                "can_add_evm": allow_dex and not wallet_limit_reached,
+                "can_add_wallet": allow_dex and not wallet_limit_reached,
             },
             "last_refresh_at": refresh_state["last_refresh_at"],
         }

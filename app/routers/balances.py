@@ -30,7 +30,11 @@ from app.schemas.balance import (
     ServiceHealthSchema,
 )
 from app.services.audit_log_service import AuditLogService
-from app.services.balance_service import BalanceService
+from app.services.balance_service import (
+    BalanceService,
+    WALLET_SERVICE_PREFIXES,
+    wallet_service_name_for,
+)
 from app.services.entitlements_service import EntitlementsService
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.integration_service import IntegrationService
@@ -62,6 +66,47 @@ def _next_bucket(value: datetime, interval: str) -> datetime:
     raise ValueError(f"Unsupported interval: {interval}")
 
 
+def _active_balance_filters(active_integrations: list[object]) -> tuple[set[str], dict[str, set[int]]]:
+    allowed_services: set[str] = set()
+    active_ids_by_service: dict[str, set[int]] = {}
+
+    def _add(service: str, integration_id: int) -> None:
+        service = str(service or "").strip().lower()
+        if not service:
+            return
+        allowed_services.add(service)
+        active_ids_by_service.setdefault(service, set()).add(int(integration_id))
+
+    for integration in active_integrations:
+        integration_id = int(getattr(integration, "id", 0) or 0)
+        kind = str(getattr(integration, "kind", "") or "").strip().lower()
+        if kind == "cex":
+            _add(str(getattr(integration, "exchange_code", "") or ""), integration_id)
+            continue
+        if kind == "dex":
+            wallet_address = str(getattr(integration, "wallet_address", "") or "").strip()
+            provider = str(getattr(integration, "provider", "") or "").strip().lower()
+            if wallet_address:
+                _add(wallet_service_name_for(wallet_address, provider), integration_id)
+                _add(okx_wallet_service.legacy_service_name_for(wallet_address), integration_id)
+
+    return allowed_services, active_ids_by_service
+
+
+def _is_shadowed_legacy_balance(balance: object, balances: list[object], active_ids_by_service: dict[str, set[int]]) -> bool:
+    service = str(getattr(balance, "service", "") or "").strip().lower()
+    if getattr(balance, "integration_id", None) is not None:
+        return False
+    active_ids = active_ids_by_service.get(service)
+    if not active_ids:
+        return False
+    return any(
+        str(getattr(candidate, "service", "") or "").strip().lower() == service
+        and getattr(candidate, "integration_id", None) in active_ids
+        for candidate in balances
+    )
+
+
 @router.get("/balances", response_model=PortfolioResponse)
 async def get_balances(
     force_refresh: bool = Query(False, description="Force refresh from exchanges"),
@@ -85,25 +130,15 @@ async def get_cached_balances(
         organization_id=organization_id,
         include_inactive=False,
     )
-    allowed_services: set[str] = set()
-    for integration in active_integrations:
-        kind = str(integration.kind or "").strip().lower()
-        if kind == "cex":
-            exchange_code = str(integration.exchange_code or "").strip().lower()
-            if exchange_code:
-                allowed_services.add(exchange_code)
-            continue
-        if kind == "dex":
-            wallet_address = str(integration.wallet_address or "").strip()
-            if wallet_address:
-                allowed_services.add(IntegrationService._wallet_service_name(wallet_address))
-                allowed_services.add(okx_wallet_service.legacy_service_name_for(wallet_address))
+    allowed_services, active_ids_by_service = _active_balance_filters(active_integrations)
 
     services = []
     total_usd = 0.0
 
     for balance in balances:
         if balance.service not in allowed_services:
+            continue
+        if _is_shadowed_legacy_balance(balance, balances, active_ids_by_service):
             continue
         if not settings.is_service_enabled(balance.service):
             continue
@@ -142,12 +177,44 @@ async def get_cached_balances(
 
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh_balances(
+    async_mode: bool = Query(True, description="Queue refresh and return immediately"),
     db: AsyncSession = Depends(get_db),
     organization_id: int = Depends(get_current_organization_id),
     ctx: RequestContext = Depends(get_request_context),
     _: object = Depends(require_role("member")),
 ):
-    updated, failed = await RefreshOrchestrator(db).refresh_all_now(organization_id)
+    orchestrator = RefreshOrchestrator(db)
+
+    if async_mode:
+        jobs = await orchestrator.queue_refresh_for_organization(organization_id)
+        job_ids = [int(job.id) for job in jobs]
+        await AuditLogService(db).log_event(
+            organization_id=organization_id,
+            user_id=ctx.user_id,
+            request_id=ctx.request_id,
+            action="balances.refresh_queued",
+            resource_type="balances",
+            details={"job_ids": job_ids},
+        )
+        metrics_service.inc("balances_refresh_queued_total")
+
+        log = get_request_logger(
+            logger,
+            request_log_context(ctx.request_id, organization_id, ctx.user_id),
+        )
+        log.info("balances_refresh_queued")
+
+        return RefreshResponse(
+            status="queued",
+            message=f"Queued {len(job_ids)} refresh jobs",
+            updated_services=[],
+            failed_services=[],
+            queued=True,
+            job_ids=job_ids,
+            job_status="queued",
+        )
+
+    updated, failed = await orchestrator.refresh_all_now(organization_id)
 
     status = "ok" if not failed else "partial" if updated else "error"
     message = f"Updated {len(updated)} services"
@@ -252,7 +319,9 @@ async def get_history_chart(
     repo = BalanceRepository(db)
     now = datetime.now(timezone.utc)
     effective_end = end_date or now
-    effective_start = start_date or (effective_end - timedelta(days=1 if interval == "hour" else 30))
+    effective_start = start_date or (
+        effective_end - timedelta(days=1 if interval == "hour" else 30)
+    )
 
     points = await repo.get_history_points(
         organization_id=organization_id,
@@ -323,29 +392,24 @@ async def get_entitlements(
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary(
+    include_metrics: bool = Query(
+        False,
+        description="Include slower history-based trader metrics",
+    ),
     db: AsyncSession = Depends(get_db),
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
     balance_repo = BalanceRepository(db)
-    balances = await balance_repo.get_all_latest_balances(organization_id=organization_id)
-    active_integrations = await IntegrationService(db).list_integrations(
-        organization_id=organization_id,
-        include_inactive=False,
+    balances = await balance_repo.get_all_latest_balances(
+        organization_id=organization_id
     )
-    allowed_services: set[str] = set()
-    for integration in active_integrations:
-        kind = str(integration.kind or "").strip().lower()
-        if kind == "cex":
-            exchange_code = str(integration.exchange_code or "").strip().lower()
-            if exchange_code:
-                allowed_services.add(exchange_code)
-            continue
-        if kind == "dex":
-            wallet_address = str(integration.wallet_address or "").strip()
-            if wallet_address:
-                allowed_services.add(IntegrationService._wallet_service_name(wallet_address))
-                allowed_services.add(okx_wallet_service.legacy_service_name_for(wallet_address))
+    integrations = await IntegrationService(db).list_integrations(
+        organization_id=organization_id,
+        include_inactive=True,
+    )
+    active_integrations = [item for item in integrations if item.is_active]
+    allowed_services, active_ids_by_service = _active_balance_filters(active_integrations)
 
     total_usd = 0.0
     spot_total = 0.0
@@ -357,6 +421,8 @@ async def get_dashboard_summary(
     for balance in balances:
         if balance.service not in allowed_services:
             continue
+        if _is_shadowed_legacy_balance(balance, balances, active_ids_by_service):
+            continue
         if not settings.is_service_enabled(balance.service):
             continue
         total_usd += float(balance.total_usd)
@@ -365,7 +431,7 @@ async def get_dashboard_summary(
             latest_updated_at = updated_at
 
         service_name = (balance.service or "").lower()
-        is_dex = service_name.startswith("okx_wallet")
+        is_dex = any(service_name.startswith(p) for p in WALLET_SERVICE_PREFIXES)
 
         if is_dex:
             dex_total += float(balance.total_usd)
@@ -405,12 +471,10 @@ async def get_dashboard_summary(
         else:
             freshness = f"old_{minutes}m"
 
-    entitlements = await EntitlementsService(db).get_effective_entitlements(organization_id)
-
-    integrations = await IntegrationService(db).list_integrations(
-        organization_id=organization_id,
-        include_inactive=True,
+    entitlements = await EntitlementsService(db).get_effective_entitlements(
+        organization_id
     )
+
     integrations_active = sum(1 for i in integrations if i.is_active)
     integrations_inactive = len(integrations) - integrations_active
 
@@ -430,6 +494,81 @@ async def get_dashboard_summary(
         start_date=tx_start,
         status="failed",
     )
+
+    # === Trader metrics from balance history ===
+    balance_today_start: float | None = None
+    balance_24h_ago: float | None = None
+    balance_7d_ago: float | None = None
+    balance_30d_ago: float | None = None
+    pnl_today: float | None = None
+    pnl_today_pct: float | None = None
+    pnl_24h: float | None = None
+    pnl_24h_pct: float | None = None
+    pnl_7d: float | None = None
+    pnl_7d_pct: float | None = None
+    pnl_30d: float | None = None
+    pnl_30d_pct: float | None = None
+    avg_daily_pnl: float | None = None
+    best_day_pnl: float | None = None
+    worst_day_pnl: float | None = None
+
+    if include_metrics:
+        try:
+            import asyncio
+
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            snapshot_specs = [
+                (today_start, timedelta(days=2)),
+                (now - timedelta(hours=24), timedelta(days=2)),
+                (now - timedelta(days=7), timedelta(days=10)),
+                (now - timedelta(days=30), timedelta(days=40)),
+            ]
+
+            async def _load_snapshot_values() -> list[float]:
+                values: list[float] = []
+                for point, max_age in snapshot_specs:
+                    values.append(
+                        await balance_repo.get_portfolio_snapshot_total_at(
+                            organization_id=organization_id,
+                            at=point,
+                            max_age=max_age,
+                        )
+                    )
+                return values
+
+            snapshot_values = await asyncio.wait_for(
+                _load_snapshot_values(),
+                timeout=1.5,
+            )
+
+            current_balance = total_usd
+            balance_today_candidate = float(snapshot_values[0] or 0.0)
+            balance_24h_candidate = float(snapshot_values[1] or 0.0)
+            balance_7d_candidate = float(snapshot_values[2] or 0.0)
+            balance_30d_candidate = float(snapshot_values[3] or 0.0)
+
+            if balance_today_candidate > 0:
+                balance_today_start = balance_today_candidate
+                pnl_today = current_balance - balance_today_start
+                pnl_today_pct = pnl_today / balance_today_start * 100
+
+            if balance_24h_candidate > 0:
+                balance_24h_ago = balance_24h_candidate
+                pnl_24h = current_balance - balance_24h_ago
+                pnl_24h_pct = pnl_24h / balance_24h_ago * 100
+
+            if balance_7d_candidate > 0:
+                balance_7d_ago = balance_7d_candidate
+                pnl_7d = current_balance - balance_7d_ago
+                pnl_7d_pct = pnl_7d / balance_7d_ago * 100
+
+            if balance_30d_candidate > 0:
+                balance_30d_ago = balance_30d_candidate
+                pnl_30d = current_balance - balance_30d_ago
+                pnl_30d_pct = pnl_30d / balance_30d_ago * 100
+
+        except Exception as exc:
+            logger.warning("Failed to compute trader metrics: %r", exc)
 
     return DashboardSummaryResponse(
         total_usd=total_usd,
@@ -453,7 +592,24 @@ async def get_dashboard_summary(
             "failed": transactions_failed_24h,
         },
         timestamp=now,
+        # Trader metrics from balance history
+        balance_today_start=balance_today_start,
+        balance_24h_ago=balance_24h_ago,
+        balance_7d_ago=balance_7d_ago,
+        balance_30d_ago=balance_30d_ago,
+        pnl_today=pnl_today,
+        pnl_today_pct=pnl_today_pct,
+        pnl_24h=pnl_24h,
+        pnl_24h_pct=pnl_24h_pct,
+        pnl_7d=pnl_7d,
+        pnl_7d_pct=pnl_7d_pct,
+        pnl_30d=pnl_30d,
+        pnl_30d_pct=pnl_30d_pct,
+        avg_daily_pnl=avg_daily_pnl,
+        best_day_pnl=best_day_pnl,
+        worst_day_pnl=worst_day_pnl,
     )
+
 
 
 @router.get("/health", response_model=HealthResponse)

@@ -1,0 +1,22 @@
+{
+  "name": "debank-sdk",
+  "version": "1.0.0",
+  "description": "HTTP SDK для DeBank API с локальной подписью запросов",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node examples/http-balance.ts",
+    "lint": "tsc --noEmit",
+    "extract:signer": "ts-node scripts/extract-signer.ts",
+    "download:chain-icons": "ts-node scripts/download-chain-icons.ts"
+  },
+  "keywords": ["debank", "sdk", "http", "signer", "portfolio", "transactions"],
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.52.0",
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  }
+}

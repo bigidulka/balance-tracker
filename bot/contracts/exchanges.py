@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SUPPORTED_CEX_EXCHANGES: list[tuple[str, str]] = [
+    ("cryptobot", "CryptoBot Apps"),
     ("binance", "Binance"),
     ("bitget", "Bitget"),
     ("bybit", "Bybit"),

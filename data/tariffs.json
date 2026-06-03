@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "plans": [
+    {
+      "code": "free",
+      "name": "Free",
+      "price_monthly": 0,
+      "currency": "USD",
+      "policy": {
+        "version": 1,
+        "features": {
+          "allow_dex": true
+        },
+        "limits": {
+          "max_integrations": 6,
+          "max_accounts_per_exchange": 0,
+          "max_cex_accounts": 5,
+          "max_wallets": 1,
+          "max_evm_wallets": 1,
+          "min_refresh_interval_seconds": 600
+        },
+        "background": {
+          "enabled": true,
+          "refresh_interval_seconds": 600
+        },
+        "throttling": {
+          "min_refresh_interval_seconds": 600,
+          "background_refresh_interval_seconds": 600
+        }
+      }
+    },
+    {
+      "code": "low",
+      "name": "Low",
+      "price_monthly": 5,
+      "currency": "USD",
+      "policy": {
+        "version": 1,
+        "features": {
+          "allow_dex": true
+        },
+        "limits": {
+          "max_integrations": 17,
+          "max_accounts_per_exchange": 0,
+          "max_cex_accounts": 14,
+          "max_wallets": 3,
+          "max_evm_wallets": 3,
+          "min_refresh_interval_seconds": 300
+        },
+        "background": {
+          "enabled": true,
+          "refresh_interval_seconds": 300
+        },
+        "throttling": {
+          "min_refresh_interval_seconds": 300,
+          "background_refresh_interval_seconds": 300
+        }
+      }
+    },
+    {
+      "code": "medium",
+      "name": "Medium",
+      "price_monthly": 10,
+      "currency": "USD",
+      "policy": {
+        "version": 1,
+        "features": {
+          "allow_dex": true
+        },
+        "limits": {
+          "max_integrations": 35,
+          "max_accounts_per_exchange": 0,
+          "max_cex_accounts": 28,
+          "max_wallets": 7,
+          "max_evm_wallets": 7,
+          "min_refresh_interval_seconds": 120
+        },
+        "background": {
+          "enabled": true,
+          "refresh_interval_seconds": 120
+        },
+        "throttling": {
+          "min_refresh_interval_seconds": 120,
+          "background_refresh_interval_seconds": 120
+        }
+      }
+    },
+    {
+      "code": "pro",
+      "name": "Pro",
+      "price_monthly": 20,
+      "currency": "USD",
+      "policy": {
+        "version": 1,
+        "features": {
+          "allow_dex": true
+        },
+        "limits": {
+          "max_integrations": 71,
+          "max_accounts_per_exchange": 0,
+          "max_cex_accounts": 56,
+          "max_wallets": 15,
+          "max_evm_wallets": 15,
+          "min_refresh_interval_seconds": 0
+        },
+        "background": {
+          "enabled": true,
+          "refresh_interval_seconds": 0
+        },
+        "throttling": {
+          "min_refresh_interval_seconds": 0,
+          "background_refresh_interval_seconds": 60
+        }
+      }
+    }
+  ]
+}
