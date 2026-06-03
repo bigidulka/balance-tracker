@@ -44,7 +44,7 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     Balance(
                         organization_id=org.id,
-                        service="okx_wallet_demo",
+                        service="okx_wallet_demoabcd",
                         assets=[],
                         accounts=[],
                         total_usd=50.0,
@@ -58,6 +58,15 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
                         kind="cex",
                         exchange_code="binance",
                         account_ref="main",
+                        is_active=True,
+                    ),
+                    Integration(
+                        organization_id=org.id,
+                        provider="okx_wallet",
+                        name="Wallet Main",
+                        kind="dex",
+                        wallet_address="demoabcd1234",
+                        chain="ethereum",
                         is_active=True,
                     ),
                     Integration(
@@ -127,13 +136,30 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
                     "integrations",
                     "transactions_24h",
                     "timestamp",
+                    # Trader metrics
+                    "balance_today_start",
+                    "balance_24h_ago",
+                    "balance_7d_ago",
+                    "balance_30d_ago",
+                    "pnl_today",
+                    "pnl_today_pct",
+                    "pnl_24h",
+                    "pnl_24h_pct",
+                    "pnl_7d",
+                    "pnl_7d_pct",
+                    "pnl_30d",
+                    "pnl_30d_pct",
+                    "avg_daily_pnl",
+                    "best_day_pnl",
+                    "worst_day_pnl",
                 },
             )
 
+
             self.assertEqual(set(payload["integrations"].keys()), {"total", "active", "inactive"})
             self.assertEqual(set(payload["transactions_24h"].keys()), {"total", "pending", "failed"})
-            self.assertEqual(payload["integrations"]["total"], 2)
-            self.assertEqual(payload["integrations"]["active"], 1)
+            self.assertEqual(payload["integrations"]["total"], 3)
+            self.assertEqual(payload["integrations"]["active"], 2)
             self.assertEqual(payload["integrations"]["inactive"], 1)
             self.assertEqual(payload["transactions_24h"]["total"], 3)
             self.assertEqual(payload["transactions_24h"]["pending"], 1)

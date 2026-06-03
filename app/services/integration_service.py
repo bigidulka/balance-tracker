@@ -1,11 +1,11 @@
 from fastapi import HTTPException
 from sqlalchemy import and_, delete, select
+from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.balance import Integration, IntegrationSecret
 from app.services.entitlements_service import EntitlementsService
 from app.services.refresh_orchestrator import RefreshOrchestrator
-from app.services.okx_wallet import okx_wallet_service
 
 
 class IntegrationService:
@@ -14,8 +14,10 @@ class IntegrationService:
         self.entitlements = EntitlementsService(session)
 
     @staticmethod
-    def _wallet_service_name(wallet_address: str) -> str:
-        return okx_wallet_service.service_name_for(wallet_address)
+    def _wallet_service_name(wallet_address: str, provider: str = "okx_wallet") -> str:
+        from app.services.balance_service import wallet_service_name_for
+
+        return wallet_service_name_for(wallet_address, provider)
 
     async def create_integration(
         self,
@@ -32,6 +34,7 @@ class IntegrationService:
         api_secret: str | None = None,
         api_password: str | None = None,
         api_uid: str | None = None,
+        api_token: str | None = None,
     ) -> Integration:
         normalized_kind = kind.lower()
         normalized_exchange_code = exchange_code.lower() if exchange_code else None
@@ -73,9 +76,11 @@ class IntegrationService:
                 },
             )
 
+        normalized_provider = provider.lower().strip()
+
         integration = Integration(
             organization_id=organization_id,
-            provider=provider,
+            provider=normalized_provider,
             name=name,
             kind=normalized_kind,
             exchange_code=normalized_exchange_code,
@@ -93,6 +98,7 @@ class IntegrationService:
             "api_secret": api_secret,
             "api_password": api_password,
             "api_uid": api_uid,
+            "api_token": api_token,
         }
         for key_name, secret_value in secret_pairs.items():
             value = str(secret_value or "").strip()
@@ -116,16 +122,41 @@ class IntegrationService:
         organization_id: int,
         integration_id: int,
     ) -> dict[str, str]:
-        await self.get_integration(organization_id, integration_id)
-        result = await self.session.execute(
-            select(IntegrationSecret).where(
-                IntegrationSecret.integration_id == integration_id
+        secrets_map = await self.get_integration_secrets_bulk(
+            organization_id, [integration_id]
+        )
+        return secrets_map.get(integration_id, {})
+
+    async def get_integration_secrets_bulk(
+        self,
+        organization_id: int,
+        integration_ids: list[int],
+    ) -> dict[int, dict[str, str]]:
+        normalized_ids = sorted({int(value) for value in integration_ids if int(value) > 0})
+        if not normalized_ids:
+            return {}
+
+        integration_rows = await self.session.execute(
+            select(Integration.id).where(
+                and_(
+                    Integration.organization_id == organization_id,
+                    Integration.id.in_(normalized_ids),
+                )
             )
         )
-        return {
-            str(secret.key_name): str(secret.secret_value)
-            for secret in result.scalars().all()
-        }
+        allowed_ids = {int(row[0]) for row in integration_rows.all()}
+        if not allowed_ids:
+            return {}
+
+        result = await self.session.execute(
+            select(IntegrationSecret).where(
+                IntegrationSecret.integration_id.in_(allowed_ids)
+            )
+        )
+        grouped: dict[int, dict[str, str]] = defaultdict(dict)
+        for secret in result.scalars().all():
+            grouped[int(secret.integration_id)][str(secret.key_name)] = str(secret.secret_value)
+        return dict(grouped)
 
     async def list_integrations(
         self,

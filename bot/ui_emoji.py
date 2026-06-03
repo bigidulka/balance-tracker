@@ -50,7 +50,9 @@ UI_ICONS: dict[str, str] = {
     "futures":      "5935913431801532272",  # 📉 futures / chart
     "dex":          "5769126056262898415",  # 👛 DEX wallet
     "transactions": "5902206159095339799",  # 💳 transactions / transfers
+    "notifications": "6030657343744644592",  # 🔔 notifications
     "integrations": "5884479287171485878",  # 📦 connected integrations
+
     "settings":     "6032742198179532882",  # ⚙ settings gear
     "plan":         "5886285355279193209",  # 🏷 plan / tag
     "wallet":       "5769126056262898415",  # 👛 generic wallet
@@ -77,4 +79,5 @@ EXCHANGE_EMOJI_IDS: dict[str, str] = {
     "coinex":   "5323588469920931646",
     "bingx":    "5323684836102152001",
     "xt":       "5323343940252901094",
+    "cryptobot": "6030657343744644592",
 }

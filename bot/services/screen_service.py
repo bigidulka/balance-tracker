@@ -25,6 +25,7 @@ from bot.contracts.callbacks import (
     ROUTE_INTEGRATIONS,
     ROUTE_INPUT,
     ROUTE_MAIN,
+    ROUTE_NOTIFICATIONS,
     ROUTE_PAYMENTS,
     ROUTE_PLAN,
     ROUTE_ADMIN,
@@ -40,6 +41,16 @@ from bot.contracts.callbacks import (
 from bot.contracts.exchanges import (
     SUPPORTED_CEX_EXCHANGE_CODES,
     SUPPORTED_CEX_EXCHANGE_LABELS,
+)
+from bot.naming import (
+    build_service_name_map as _build_name_map,
+    button_label as _btn_label,
+    cex_name as _cex_name,
+    dex_name as _dex_name,
+    default_creation_name as _default_name,
+    integration_label as _integration_label,
+    service_label as _service_label,
+    short_addr as _short_addr,
 )
 from bot.contracts.tariffs import get_tariff_plan, is_evm_chain
 from bot.i18n import normalize_locale, t
@@ -74,13 +85,23 @@ class TariffSnapshot:
     plan_name: str
     cex_used: int
     cex_limit: int
-    evm_used: int
-    evm_limit: int
+    wallet_used: int
+    wallet_limit: int
     refresh_interval_seconds: int
     can_refresh: bool
     retry_after_seconds: int
     allow_dex: bool
     last_refresh_at: datetime | None = None
+
+    @property
+    def evm_used(self) -> int:
+        """Legacy alias for wallet_used."""
+        return self.wallet_used
+
+    @property
+    def evm_limit(self) -> int:
+        """Legacy alias for wallet_limit."""
+        return self.wallet_limit
 
 
 class ScreenService:
@@ -91,13 +112,8 @@ class ScreenService:
     async def ensure_access(self, user_id: int) -> str | None:
         if not await self.user_repo.is_local_allowed(user_id):
             return msg.ACCESS_DENIED
-        try:
-            await self.api_repo.get_balances()
-        except Exception as exc:
-            text = str(exc)
-            if "401" in text or "403" in text:
-                await clear_backend_auth_session(user_id)
-                return "Backend auth failed for this Telegram user."
+        # Do not probe balances on every callback; rely on real screen/API calls.
+        # Only auth failures on actual fetches should clear backend session.
         return None
 
     async def menu_context(
@@ -153,7 +169,8 @@ class ScreenService:
             return await self._render_exchange_detail(
                 route=ROUTE_SPOT_DETAIL,
                 back_route=ROUTE_SPOT_DETAIL,
-                title_suffix="Spot",
+                title_suffix_key="spot",
+                description_key="spot_detail_description",
                 exchange_key="spot_exchanges",
                 exchange=str(payload.get("exchange") or ""),
                 exchange_index=self._safe_int(payload.get("i"), default=-1),
@@ -164,7 +181,8 @@ class ScreenService:
             return await self._render_exchange_detail(
                 route=ROUTE_FUTURES_DETAIL,
                 back_route=ROUTE_FUTURES_DETAIL,
-                title_suffix="Futures",
+                title_suffix_key="futures",
+                description_key="futures_detail_description",
                 exchange_key="futures_exchanges",
                 exchange=str(payload.get("exchange") or ""),
                 exchange_index=self._safe_int(payload.get("i"), default=-1),
@@ -179,6 +197,8 @@ class ScreenService:
             )
         if route == ROUTE_TRANSACTIONS:
             return await self._render_transactions_stub(user_id=user_id, rev=rev)
+        if route == ROUTE_NOTIFICATIONS:
+            return await self._render_notifications_stub(user_id=user_id, rev=rev)
         if route == ROUTE_INTEGRATIONS:
             page = self._safe_int(payload.get("page"), default=0)
             return await self._render_integrations(user_id=user_id, rev=rev, page=page)
@@ -234,9 +254,14 @@ class ScreenService:
             return await self._render_settings(user_id=user_id, rev=rev)
         return await self._render_main(user_id=user_id, rev=rev)
 
-    async def refresh_main(self) -> None:
-        await self.api_repo.refresh_balances()
+    async def refresh_main(self) -> dict[str, Any]:
+        payload = await self.api_repo.refresh_balances()
+        # If refresh is queued, backend data will update asynchronously; do not
+        # block the UI by forcing an immediate refetch of the same stale state.
+        if bool(payload.get("queued")):
+            return payload
         await self.api_repo.get_balances(force_update_cache=True)
+        return payload
 
     async def refresh_transactions(self, *, user_id: int) -> None:
         user_settings = await self.user_repo.get_settings(user_id)
@@ -270,6 +295,26 @@ class ScreenService:
         user_settings = await self.user_repo.get_settings(user_id)
         user_settings["hide_small"] = not bool(user_settings.get("hide_small"))
         await self.user_repo.save_settings(user_id, user_settings)
+
+    async def update_display_currency(self, *, user_id: int, currency: str) -> None:
+        user_settings = await self.user_repo.get_settings(user_id)
+        user_settings["display_currency"] = str(currency).strip().upper()
+        await self.user_repo.save_settings(user_id, user_settings)
+
+    async def cycle_display_currency(self, *, user_id: int) -> None:
+        """Cycle to the next currency in the supported list."""
+        from bot.services.fx_rates import currency_codes
+        codes = currency_codes()
+        user_settings = await self.user_repo.get_settings(user_id)
+        current = str(user_settings.get("display_currency") or "USD").strip().upper()
+        try:
+            idx = codes.index(current)
+            next_code = codes[(idx + 1) % len(codes)]
+        except ValueError:
+            next_code = "USD"
+        user_settings["display_currency"] = next_code
+        await self.user_repo.save_settings(user_id, user_settings)
+
 
     async def apply_input_value(
         self, *, user_id: int, kind: str, raw_value: str
@@ -342,7 +387,7 @@ class ScreenService:
             "return_route": return_route,
             "return_payload": dict(return_payload or {}),
             "draft": {
-                "provider": "okx_wallet",
+                "provider": wallet_provider or "okx_wallet",
                 "kind": "dex",
             },
         }
@@ -424,23 +469,38 @@ class ScreenService:
             keyboard=kb.input_waiting(rev=rev, locale=locale),
         )
 
+    # ── Billing cache (rarely changes, avoid per-render API calls) ──
+    _billing_cache: dict[str, Any] = {}
+    _billing_cache_ts: float = 0.0
+    _BILLING_CACHE_TTL: float = 60.0  # seconds
+
     async def _load_billing_payload(self) -> dict[str, Any]:
+        import time
+        now = time.monotonic()
+        if now - self._billing_cache_ts < self._BILLING_CACHE_TTL and self._billing_cache:
+            return self._billing_cache
         try:
             payload = await self.api_repo.get_billing_current()
             if payload:
+                self._billing_cache = payload
+                self._billing_cache_ts = now
                 return payload
         except Exception:
             pass
         try:
             fallback = await self.api_repo.get_capabilities()
+            if fallback and isinstance(fallback, dict):
+                self._billing_cache = fallback
+                self._billing_cache_ts = now
+                return fallback
         except Exception:
-            return {}
-        return fallback if isinstance(fallback, dict) else {}
+            pass
+        return self._billing_cache  # return stale cache on error
 
     @staticmethod
     def _count_usage(integrations: list[dict[str, Any]]) -> tuple[int, int]:
         cex = 0
-        evm = 0
+        wallets = 0
         for item in integrations:
             if not isinstance(item, dict):
                 continue
@@ -450,9 +510,9 @@ class ScreenService:
             if kind == "cex":
                 cex += 1
                 continue
-            if kind == "dex" and is_evm_chain(str(item.get("chain") or "")):
-                evm += 1
-        return cex, evm
+            if kind == "dex":
+                wallets += 1
+        return cex, wallets
 
     @staticmethod
     def _refresh_state(
@@ -502,11 +562,19 @@ class ScreenService:
         )
 
         cex_state = usage.get("cex") if isinstance(usage.get("cex"), dict) else {}
-        evm_state = usage.get("evm") if isinstance(usage.get("evm"), dict) else {}
+        wallet_state = (
+            usage.get("wallets")
+            if isinstance(usage.get("wallets"), dict)
+            else usage.get("evm")
+            if isinstance(usage.get("evm"), dict)
+            else {}
+        )
         cex_used = self._safe_int(cex_state.get("active"), default=-1)
-        evm_used = self._safe_int(evm_state.get("active"), default=-1)
+        wallet_used = self._safe_int(wallet_state.get("active"), default=-1)
         cex_limit = self._safe_int(limits.get("max_cex_accounts"), default=0)
-        evm_limit = self._safe_int(limits.get("max_evm_wallets"), default=0)
+        wallet_limit = self._safe_int(
+            limits.get("max_wallets") or limits.get("max_evm_wallets"), default=0
+        )
         refresh_interval_seconds = self._safe_int(
             (
                 billing.get("background")
@@ -516,22 +584,26 @@ class ScreenService:
             default=0,
         )
 
-        if cex_used < 0 or evm_used < 0:
+        if cex_used < 0 or wallet_used < 0:
             try:
                 integrations = await self.api_repo.get_integrations()
             except Exception:
                 integrations = []
-            fallback_cex_used, fallback_evm_used = self._count_usage(integrations)
+            fallback_cex_used, fallback_wallet_used = self._count_usage(integrations)
             if cex_used < 0:
                 cex_used = fallback_cex_used
-            if evm_used < 0:
-                evm_used = fallback_evm_used
+            if wallet_used < 0:
+                wallet_used = fallback_wallet_used
         if cex_limit <= 0:
             cex_limit = tariff.max_cex_accounts
-        if evm_limit < 0:
-            evm_limit = 0
-        if evm_limit == 0 and "max_evm_wallets" not in limits:
-            evm_limit = tariff.max_evm_wallets
+        if wallet_limit < 0:
+            wallet_limit = 0
+        if (
+            wallet_limit == 0
+            and "max_wallets" not in limits
+            and "max_evm_wallets" not in limits
+        ):
+            wallet_limit = tariff.max_wallets
         if refresh_interval_seconds <= 0:
             refresh_interval_seconds = tariff.refresh_interval_seconds
 
@@ -575,8 +647,8 @@ class ScreenService:
             ),
             cex_used=cex_used,
             cex_limit=cex_limit,
-            evm_used=evm_used,
-            evm_limit=evm_limit,
+            wallet_used=wallet_used,
+            wallet_limit=wallet_limit,
             refresh_interval_seconds=refresh_interval_seconds,
             can_refresh=can_refresh,
             retry_after_seconds=retry_after_seconds,
@@ -605,16 +677,16 @@ class ScreenService:
         reason_text = reason.strip()
         if reason_text == "cex_limit_reached":
             reason_text = f"{t(locale, 'cex_accounts')}: {snapshot.cex_used}/{snapshot.cex_limit} {t(locale, 'limit_reached')}"
-        elif reason_text == "evm_limit_reached":
-            reason_text = f"{t(locale, 'evm_wallets')}: {snapshot.evm_used}/{snapshot.evm_limit} {t(locale, 'limit_reached')}"
+        elif reason_text in ("evm_limit_reached", "wallet_limit_reached"):
+            reason_text = f"{t(locale, 'wallets')}: {snapshot.wallet_used}/{snapshot.wallet_limit} {t(locale, 'limit_reached')}"
 
         text = msg.plan_text(
             plan_code=snapshot.plan_code,
             plan_name=snapshot.plan_name,
             cex_used=snapshot.cex_used,
             cex_limit=snapshot.cex_limit,
-            evm_used=snapshot.evm_used,
-            evm_limit=snapshot.evm_limit,
+            evm_used=snapshot.wallet_used,
+            evm_limit=snapshot.wallet_limit,
             refresh_interval_seconds=snapshot.refresh_interval_seconds,
             can_refresh=snapshot.can_refresh,
             retry_after_seconds=snapshot.retry_after_seconds,
@@ -681,6 +753,11 @@ class ScreenService:
                 invoice_id=int(active_invoice.get("id"))
                 if isinstance(active_invoice, dict) and active_invoice.get("id")
                 else None,
+                invoice_url=(
+                    str(active_invoice.get("bot_invoice_url") or active_invoice.get("pay_url") or "")
+                    if isinstance(active_invoice, dict)
+                    else None
+                ),
                 rev=rev,
                 locale=locale,
                 refresh_time_label=self._refresh_time_label(
@@ -785,17 +862,41 @@ class ScreenService:
             )
         return True, None
 
+    # Chains counted against the max_evm_wallets / max_wallets plan limit.
+    # Non-EVM chains (Solana, TRON, TON, SUI) are exempt from this limit.
+    _EVM_CHAINS: frozenset[str] = frozenset(
+        {
+            "ethereum",
+            "arbitrum",
+            "optimism",
+            "base",
+            "bsc",
+            "polygon",
+            "avalanche",
+            "fantom",
+            "gnosis",
+            "zksync",
+            "linea",
+            "scroll",
+            "mantle",
+            "blast",
+            "taiko",
+        }
+    )
+
     async def can_add_evm_wallet(
         self, *, user_id: int, chain: str
     ) -> tuple[bool, str | None]:
-        if not is_evm_chain(chain):
-            return True, None
         locale = await self._locale_for_user_id(user_id)
+        # Non-EVM chains (solana, tron, ton, sui…) are not counted against
+        # the max_evm_wallets limit — always allowed from a quota perspective.
+        if chain.lower() not in self._EVM_CHAINS:
+            return True, None
         snapshot = await self._load_tariff_snapshot(user_id)
-        if snapshot.evm_used >= snapshot.evm_limit:
+        if snapshot.wallet_limit > 0 and snapshot.wallet_used >= snapshot.wallet_limit:
             return (
                 False,
-                f"{t(locale, 'evm_wallets')}: {snapshot.evm_used}/{snapshot.evm_limit} {t(locale, 'limit_reached')}",
+                f"{t(locale, 'wallets')}: {snapshot.wallet_used}/{snapshot.wallet_limit} {t(locale, 'limit_reached')}",
             )
         return True, None
 
@@ -805,13 +906,35 @@ class ScreenService:
         dt: datetime | str | None = None,
         locale: str = "ru",
         fallback_to_now: bool = False,
+        stale_after_seconds: int | None = None,
+        force_stale: bool = False,
     ) -> str | None:
         resolved = self._coerce_datetime(dt)
         if resolved is None and fallback_to_now:
             resolved = datetime.now(timezone.utc)
         if resolved is None:
             return None
-        return self._format_relative_elapsed(resolved, locale=locale)
+        label = self._format_relative_elapsed(resolved, locale=locale)
+        if force_stale or (
+            stale_after_seconds and self._is_stale(resolved, stale_after_seconds)
+        ):
+            return f"⚠️ {label}"
+        return label
+
+    @staticmethod
+    def _is_stale(dt: datetime, stale_after_seconds: int) -> bool:
+        if stale_after_seconds <= 0:
+            return False
+        now = datetime.now(timezone.utc)
+        age_seconds = max(0, int((now - dt.astimezone(timezone.utc)).total_seconds()))
+        return age_seconds > stale_after_seconds
+
+    @staticmethod
+    def _stale_after_seconds(refresh_interval_seconds: int) -> int | None:
+        interval = max(int(refresh_interval_seconds or 0), 0)
+        if interval <= 0:
+            return None
+        return interval * 3
 
     @staticmethod
     def _coerce_datetime(value: datetime | str | None) -> datetime | None:
@@ -868,6 +991,26 @@ class ScreenService:
                 latest = updated_at
         return latest
 
+    def _has_stale_services(
+        self,
+        data: dict[str, Any],
+        *,
+        service_names: set[str] | None = None,
+    ) -> bool:
+        services = data.get("services", [])
+        if not isinstance(services, list):
+            return False
+        normalized_names = {name.strip().lower() for name in (service_names or set()) if name}
+        for svc in services:
+            if not isinstance(svc, dict):
+                continue
+            service_name = str(svc.get("service") or "").strip().lower()
+            if normalized_names and service_name not in normalized_names:
+                continue
+            if not bool(svc.get("actual", False)):
+                return True
+        return False
+
     def _latest_exchange_update(
         self, data: dict[str, Any], exchange: str
     ) -> datetime | None:
@@ -890,14 +1033,45 @@ class ScreenService:
         return latest
 
     async def _render_main(self, *, user_id: int, rev: int) -> RenderedScreen:
-        allow_dex, plan_label, capabilities, throttling = await self.menu_context()
+        # Fire menu_context + dashboard_summary in parallel
+        import asyncio as _asyncio
+        menu_coro = self.menu_context()
+        summary_coro = self.api_repo.get_dashboard_summary()
+        try:
+            (allow_dex, plan_label, capabilities, throttling), summary = await _asyncio.gather(
+                menu_coro, summary_coro
+            )
+        except Exception:
+            # Fallback: sequential if parallel fails
+            allow_dex, plan_label, capabilities, throttling = await self.menu_context()
+            summary = None
+
         can_refresh = self._refresh_allowed(capabilities)
         retry_after = int(throttling.get("retry_after_seconds") or 0)
+        refresh_interval_seconds = int(throttling.get("min_refresh_interval_seconds") or 0)
+        stale_after_seconds = self._stale_after_seconds(refresh_interval_seconds)
         locale = await self._locale_for_user_id(user_id)
         refresh_time_label: str | None = None
 
+        # Currency conversion for dashboard
+        user_settings = await self.user_repo.get_settings(user_id)
+        display_currency = str(user_settings.get("display_currency") or "USD").strip().upper()
+        converted_total: float | None = None
+        currency_label = ""
+        if display_currency != "USD" and summary:
+            try:
+                from bot.services.fx_rates import fetch_fx_rates, convert_usd, format_fiat as fx_format
+                rates = await fetch_fx_rates()
+                total_usd = float(summary.get("total_usd") or 0.0)
+                converted_total = convert_usd(total_usd, display_currency, rates)
+                currency_label = fx_format(converted_total, display_currency)
+            except Exception:
+                converted_total = None
+                currency_label = ""
+
         try:
-            summary = await self.api_repo.get_dashboard_summary()
+            if summary is None:
+                summary = await self.api_repo.get_dashboard_summary()
             if settings.no_backend_ui_mode:
                 summary["plan"] = summary.get("plan") or {
                     "name": "UI Preview",
@@ -907,21 +1081,33 @@ class ScreenService:
             refresh_time_label = self._refresh_time_label(
                 dt=summary.get("latest_updated_at"),
                 locale=locale,
+                stale_after_seconds=stale_after_seconds,
             )
-            text = msg.dashboard_text(summary, locale=locale)
-        except Exception:
-            data = await self.api_repo.get_balances()
-            parsed = parse_balances(data)
-            freshness = msg.format_timestamp(data, locale=locale)
-            refresh_state = msg.format_refresh_state(
-                capabilities, throttling, locale=locale
-            )
-            refresh_time_label = self._refresh_time_label(
-                dt=self._latest_balance_update(data),
+            text = msg.dashboard_text(
+                summary,
                 locale=locale,
+                currency_label=currency_label,
             )
-            text = msg.balance_overview_text(
-                parsed, freshness, refresh_state, locale=locale
+        except Exception:
+            # Do not call get_balances() here: if dashboard summary is slow,
+            # balances endpoint is usually slow too and message handling times out.
+            fallback_summary = {
+                "total_usd": 0.0,
+                "exchanges_count": 0,
+                "spot_total": 0.0,
+                "futures_total": 0.0,
+                "dex_total": 0.0,
+                "plan": {"name": plan_label or "-", "code": "unknown"},
+                "capabilities": capabilities,
+                "throttling": throttling,
+                "integrations": {"total": 0, "active": 0},
+                "transactions_24h": {"total": 0, "pending": 0, "failed": 0},
+                "freshness": "temporarily unavailable",
+            }
+            text = msg.dashboard_text(
+                fallback_summary,
+                locale=locale,
+                currency_label="",
             )
 
         keyboard = kb.main_menu(
@@ -954,14 +1140,30 @@ class ScreenService:
         parsed = parse_balances(data)
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
+        snapshot = await self._load_tariff_snapshot(user_id)
         refresh_time_label = self._refresh_time_label(
             dt=self._latest_balance_update(data),
             locale=locale,
+            stale_after_seconds=self._stale_after_seconds(snapshot.refresh_interval_seconds),
+            force_stale=self._has_stale_services(data, service_names=set((parsed.get(exchange_key) or {}).keys())),
         )
+
+        try:
+            integrations = await self.api_repo.get_integrations()
+        except Exception:
+            integrations = []
+        name_map = _build_name_map(integrations)
+        stale_services = {
+            str(svc.get("service") or "").strip().lower()
+            for svc in (data.get("services") or [])
+            if isinstance(svc, dict) and not bool(svc.get("actual", False))
+        }
 
         lines, exchanges = self._select_exchange_rows(
             parsed.get(exchange_key, {}),
             hide_small=bool(user_settings.get("hide_small")),
+            name_map=name_map,
+            stale_services=stale_services,
         )
 
         per_page = 8
@@ -995,6 +1197,7 @@ class ScreenService:
                 per_page=per_page,
                 rev=rev,
                 locale=locale,
+                labels=lines,
                 refresh_time_label=refresh_time_label,
             )
             if route == ROUTE_SPOT_LIST
@@ -1004,6 +1207,7 @@ class ScreenService:
                 per_page=per_page,
                 rev=rev,
                 locale=locale,
+                labels=lines,
                 refresh_time_label=refresh_time_label,
             )
         )
@@ -1016,7 +1220,8 @@ class ScreenService:
         *,
         route: str,
         back_route: str,
-        title_suffix: str,
+        title_suffix_key: str,
+        description_key: str,
         exchange_key: str,
         exchange: str,
         exchange_index: int,
@@ -1027,9 +1232,11 @@ class ScreenService:
         parsed = parse_balances(data)
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
+        snapshot = await self._load_tariff_snapshot(user_id)
         refresh_time_label = self._refresh_time_label(
             dt=self._latest_exchange_update(data, exchange),
             locale=locale,
+            stale_after_seconds=self._stale_after_seconds(snapshot.refresh_interval_seconds),
         )
 
         exchanges_map = parsed.get(exchange_key, {}) or {}
@@ -1060,10 +1267,25 @@ class ScreenService:
         has_more = len(assets) > len(shown_assets)
         more_count = max(0, len(assets) - len(shown_assets))
 
+        try:
+            integrations = await self.api_repo.get_integrations()
+        except Exception:
+            integrations = []
+        detail_name_map = _build_name_map(integrations)
+        stale_services = {
+            str(svc.get("service") or "").strip().lower()
+            for svc in (data.get("services") or [])
+            if isinstance(svc, dict) and not bool(svc.get("actual", False))
+        }
+        exchange_display = detail_name_map.get(exchange) or _service_label(exchange)
+        if exchange.strip().lower() in stale_services:
+            exchange_display = f"{exchange_display} ⚠️"
+
+        title_suffix = t(locale, title_suffix_key)
         text = msg.exchange_detail_text(
-            title=f"{exchange} • {title_suffix}",
+            title=f"{exchange_display} • {title_suffix}",
             total_usd=float(acc.get("total_usd", 0) or 0),
-            description=f"{title_suffix} account asset breakdown for the selected exchange.",
+            description=t(locale, description_key),
             assets=shown_assets,
             has_more=has_more,
             more_count=more_count,
@@ -1088,9 +1310,12 @@ class ScreenService:
         parsed = parse_balances(data)
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
+        snapshot = await self._load_tariff_snapshot(user_id)
         refresh_time_label = self._refresh_time_label(
             dt=self._latest_balance_update(data),
             locale=locale,
+            stale_after_seconds=self._stale_after_seconds(snapshot.refresh_interval_seconds),
+            force_stale=self._has_stale_services(data, service_names=set((parsed.get("dex_wallets") or {}).keys())),
         )
 
         try:
@@ -1098,12 +1323,18 @@ class ScreenService:
         except Exception:
             integrations = []
         name_map = self._build_service_name_map(integrations)
+        stale_services = {
+            str(svc.get("service") or "").strip().lower()
+            for svc in (data.get("services") or [])
+            if isinstance(svc, dict) and not bool(svc.get("actual", False))
+        }
 
         dex_wallets = parsed.get("dex_wallets") or {}
         wallet_items = self._select_wallet_rows(
             dex_wallets,
             hide_small=bool(user_settings.get("hide_small")),
             name_map=name_map,
+            stale_services=stale_services,
         )
         if wallet_index < 0:
             per_page = 8
@@ -1174,6 +1405,8 @@ class ScreenService:
         label = name_map.get(service) or self._display_name_for_service(
             service, parsed, include_total=False
         )
+        if service.strip().lower() in stale_services:
+            label = f"{label} ⚠️"
         address = self._wallet_address_from_service(service)
 
         # Enrich with chain breakdown + full token names from debank-sdk portfolio API
@@ -1228,7 +1461,7 @@ class ScreenService:
     async def _render_transactions_stub(
         self, *, user_id: int, rev: int
     ) -> RenderedScreen:
-        """Placeholder screen while the Transactions feature is in development."""
+        """Placeholder screen while Transactions feature is in development."""
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
         text = Text(
@@ -1245,6 +1478,30 @@ class ScreenService:
         )
         return RenderedScreen(
             route=ROUTE_TRANSACTIONS,
+            payload={},
+            text=text,
+            keyboard=builder.as_markup(),
+        )
+
+    async def _render_notifications_stub(
+        self, *, user_id: int, rev: int
+    ) -> RenderedScreen:
+        user_settings = await self.user_repo.get_settings(user_id)
+        locale = self._locale_from_settings(user_settings)
+        text = Text(
+            Bold(f"\U0001f6a7 {t(locale, 'notifications')}"),
+            "\n\n",
+            t(locale, "notifications_in_dev"),
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(
+                text=t(locale, "back"),
+                callback_data=pack_callback(ROUTE_NOTIFICATIONS, ACTION_BACK, rev=rev),
+            )
+        )
+        return RenderedScreen(
+            route=ROUTE_NOTIFICATIONS,
             payload={},
             text=text,
             keyboard=builder.as_markup(),
@@ -1367,23 +1624,42 @@ class ScreenService:
         self, *, user_id: int, rev: int, page: int = 0
     ) -> RenderedScreen:
         integrations = await self.api_repo.get_integrations()
+        balances: dict[str, Any] = {}
+        try:
+            balances = await self.api_repo.get_balances()
+        except Exception:
+            balances = {}
         locale = await self._locale_for_user_id(user_id)
         snapshot = await self._load_tariff_snapshot(user_id)
         per_page = 8
         total = len(integrations)
         total_pages = max(1, math.ceil(total / per_page))
         page = max(0, min(page, total_pages - 1))
+        stale_services = {
+            str(svc.get("service") or "").strip().lower()
+            for svc in (balances.get("services") or [])
+            if isinstance(svc, dict) and not bool(svc.get("actual", False))
+        }
+        # Enrich every item with display_name once — used by both text and keyboard
+        enriched = [
+            dict(
+                item,
+                display_name=(
+                    f"{self._display_name_for_integration(item)} ⚠️"
+                    if self._service_name_from_integration(item).strip().lower() in stale_services
+                    else self._display_name_for_integration(item)
+                ),
+            )
+            for item in integrations
+        ]
         text = msg.integrations_text(
-            [
-                dict(item, display_name=self._display_name_for_integration(item))
-                for item in integrations
-            ],
+            enriched,
             page=page,
             per_page=per_page,
             cex_used=snapshot.cex_used,
             cex_limit=snapshot.cex_limit,
-            evm_used=snapshot.evm_used,
-            evm_limit=snapshot.evm_limit,
+            evm_used=snapshot.wallet_used,
+            evm_limit=snapshot.wallet_limit,
             locale=locale,
         )
         latest_updated_at = max(
@@ -1403,7 +1679,7 @@ class ScreenService:
             payload={"page": page},
             text=text,
             keyboard=kb.integrations(
-                integrations,
+                enriched,
                 rev=rev,
                 page=page,
                 per_page=per_page,
@@ -1471,10 +1747,12 @@ class ScreenService:
     async def _render_settings(self, *, user_id: int, rev: int) -> RenderedScreen:
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
+        display_currency = str(user_settings.get("display_currency") or "USD").strip().upper()
         text = msg.settings_text(
             hide_small=bool(user_settings.get("hide_small")),
             threshold=settings.hide_small_balance_threshold,
             language=locale,
+            display_currency=display_currency,
             locale=locale,
         )
         return RenderedScreen(
@@ -1487,8 +1765,10 @@ class ScreenService:
                 rev=rev,
                 locale=locale,
                 is_admin=await self.is_admin_user(user_id),
+                display_currency=display_currency,
             ),
         )
+
 
     async def _process_promo_code_input(self, *, raw_value: str) -> InputProcessResult:
         if not raw_value:
@@ -1529,19 +1809,34 @@ class ScreenService:
                 )
             draft["account_ref"] = raw_value
             if not draft.get("name"):
-                exchange_label = SUPPORTED_CEX_EXCHANGE_LABELS.get(
-                    exchange_code, exchange_code.upper()
+                draft["name"] = _default_name(
+                    kind="cex",
+                    exchange_code=exchange_code,
+                    account_ref=raw_value,
                 )
-                draft["name"] = f"{exchange_label} {raw_value}"
+            next_kind = (
+                "integration_cex_api_token"
+                if exchange_code == "cryptobot"
+                else "integration_cex_api_key"
+            )
             return InputProcessResult(
                 success=True,
                 next_waiting=self._build_waiting_input(
-                    kind="integration_cex_api_key",
+                    kind=next_kind,
                     draft=draft,
                     return_route=return_route,
                     return_payload=return_payload,
                 ),
             )
+
+        if kind == "integration_cex_api_token":
+            if not raw_value:
+                return InputProcessResult(success=False, error_text="Enter app token.")
+            draft["api_token"] = raw_value
+            verify_error = await self._verify_cex_credentials(draft)
+            if verify_error:
+                return InputProcessResult(success=False, error_text=verify_error)
+            return await self._create_integration(draft)
 
         if kind == "integration_cex_api_key":
             if not raw_value:
@@ -1586,6 +1881,14 @@ class ScreenService:
                     success=False, error_text="Enter a full wallet address."
                 )
             draft["wallet_address"] = raw_value
+            if self._looks_like_sui_address(raw_value):
+                draft["chain"] = "sui"
+                draft["provider"] = "sui"
+                if not draft.get("name"):
+                    draft["name"] = _default_name(
+                        kind="dex", wallet_address=raw_value, chain="sui"
+                    )
+                return await self._create_integration(draft)
             if self._looks_like_evm_address(raw_value):
                 allowed, reason = await self.can_add_evm_wallet(
                     user_id=user_id, chain="ethereum"
@@ -1594,7 +1897,33 @@ class ScreenService:
                     return InputProcessResult(success=False, error_text=reason)
                 draft["chain"] = "ethereum"
                 if not draft.get("name"):
-                    draft["name"] = self._default_dex_label(raw_value)
+                    draft["name"] = _default_name(
+                        kind="dex", wallet_address=raw_value, chain="ethereum"
+                    )
+                return await self._create_integration(draft)
+            if self._looks_like_tron_address(raw_value):
+                draft["chain"] = "tron"
+                draft["provider"] = "tron_ton"
+                if not draft.get("name"):
+                    draft["name"] = _default_name(
+                        kind="dex", wallet_address=raw_value, chain="tron"
+                    )
+                return await self._create_integration(draft)
+            if self._looks_like_ton_address(raw_value):
+                draft["chain"] = "ton"
+                draft["provider"] = "tron_ton"
+                if not draft.get("name"):
+                    draft["name"] = _default_name(
+                        kind="dex", wallet_address=raw_value, chain="ton"
+                    )
+                return await self._create_integration(draft)
+            if self._looks_like_solana_address(raw_value):
+                draft["chain"] = "solana"
+                draft["provider"] = "okx_wallet"
+                if not draft.get("name"):
+                    draft["name"] = _default_name(
+                        kind="dex", wallet_address=raw_value, chain="solana"
+                    )
                 return await self._create_integration(draft)
             return InputProcessResult(
                 success=True,
@@ -1611,12 +1940,14 @@ class ScreenService:
             if not value or not re.fullmatch(r"[a-z0-9_-]+", value):
                 return InputProcessResult(
                     success=False,
-                    error_text="Use chain like ethereum, arbitrum, solana or ton.",
+                    error_text="Use chain like ethereum, arbitrum, bsc, solana, tron or ton.",
                 )
             draft["chain"] = value
             if not draft.get("name"):
                 address = str(draft.get("wallet_address") or "")
-                draft["name"] = self._default_dex_label(address)
+                draft["name"] = _default_name(
+                    kind="dex", wallet_address=address, chain=value
+                )
             return await self._create_integration(draft)
 
         if kind == "integration_rename":
@@ -1649,16 +1980,25 @@ class ScreenService:
         Returns an error message string if verification fails, or None on success.
         """
         exchange_code = str(draft.get("exchange_code") or "").strip().lower()
-        api_key = str(draft.get("api_key") or "").strip()
-        api_secret = str(draft.get("api_secret") or "").strip()
-        if not exchange_code or not api_key or not api_secret:
-            return None  # skip verification if incomplete — creation will fail anyway
+        api_token = str(draft.get("api_token") or "").strip()
+        if exchange_code == "cryptobot":
+            if not api_token:
+                return None
+            verify_payload: dict[str, Any] = {
+                "exchange_code": exchange_code,
+                "api_token": api_token,
+            }
+        else:
+            api_key = str(draft.get("api_key") or "").strip()
+            api_secret = str(draft.get("api_secret") or "").strip()
+            if not exchange_code or not api_key or not api_secret:
+                return None  # skip verification if incomplete — creation will fail anyway
 
-        verify_payload: dict[str, Any] = {
-            "exchange_code": exchange_code,
-            "api_key": api_key,
-            "api_secret": api_secret,
-        }
+            verify_payload = {
+                "exchange_code": exchange_code,
+                "api_key": api_key,
+                "api_secret": api_secret,
+            }
         if draft.get("api_password"):
             verify_payload["api_password"] = draft["api_password"]
         if draft.get("api_uid"):
@@ -1674,6 +2014,8 @@ class ScreenService:
             error = str(result.get("error") or "Invalid credentials")
             # Provide user-friendly messages
             lower = error.lower()
+            if exchange_code == "cryptobot":
+                return "CryptoBot app token invalid. Check app token in @CryptoBot."
             if "auth" in lower or "key" in lower or "sign" in lower:
                 return (
                     "API credentials are invalid. "
@@ -1752,26 +2094,32 @@ class ScreenService:
         return bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", value.strip()))
 
     @staticmethod
+    def _looks_like_solana_address(value: str) -> bool:
+        return bool(re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", value.strip()))
+
+    @staticmethod
+    def _looks_like_tron_address(value: str) -> bool:
+        return bool(re.fullmatch(r"T[1-9A-HJ-NP-Za-km-z]{33}", value.strip()))
+
+    @staticmethod
+    def _looks_like_ton_address(value: str) -> bool:
+        return bool(re.fullmatch(r"(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}", value.strip()))
+
+    @staticmethod
+    def _looks_like_sui_address(value: str) -> bool:
+        return bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", value.strip()))
+
+    @staticmethod
     def _short_address(value: str) -> str:
-        clean = str(value or "").strip()
-        if not clean:
-            return ""
-        if len(clean) <= 14:
-            return clean
-        return f"{clean[:6]}...{clean[-4:]}"
+        return _short_addr(value)
 
     @classmethod
-    def _default_dex_label(cls, wallet_address: str) -> str:
-        return cls._short_address(wallet_address)
+    def _default_dex_label(cls, wallet_address: str, chain: str = "") -> str:
+        return _dex_name(wallet_address, chain)
 
     @staticmethod
     def _default_cex_label(exchange_code: str, account_ref: str | None = None) -> str:
-        normalized_exchange = str(exchange_code or "").strip().lower()
-        label = SUPPORTED_CEX_EXCHANGE_LABELS.get(
-            normalized_exchange, normalized_exchange.upper()
-        )
-        account = str(account_ref or "").strip()
-        return f"{label} {account}".strip() if account else label
+        return _cex_name(exchange_code, account_ref)
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
@@ -1781,12 +2129,26 @@ class ScreenService:
             return default
 
     @staticmethod
+    def _stale_marker(is_stale: bool) -> str:
+        return " ⚠️" if is_stale else ""
+
+    @staticmethod
     def _select_exchange_rows(
         exchanges: dict[str, dict[str, Any]],
         hide_small: bool,
+        name_map: dict[str, str] | None = None,
+        stale_services: set[str] | None = None,
     ) -> tuple[list[str], list[str]]:
-        rows: list[tuple[str, float]] = []
-        for name, acc in sorted(
+        """Return (button_labels, service_keys) sorted by balance desc.
+
+        button_labels — labels with \u00b7 balance for tab buttons
+        service_keys — raw service keys used for navigation payloads
+        """
+        rows: list[tuple[str, str, float, bool]] = []
+        normalized_stale = {
+            str(item).strip().lower() for item in (stale_services or set()) if item
+        }
+        for service_key, acc in sorted(
             exchanges.items(),
             key=lambda item: item[1].get("total_usd", 0),
             reverse=True,
@@ -1794,75 +2156,117 @@ class ScreenService:
             total = float(acc.get("total_usd", 0) or 0)
             if hide_small and total < settings.hide_small_balance_threshold:
                 continue
-            rows.append((name, total))
+            is_stale = str(service_key).strip().lower() in normalized_stale
+            base_name = (name_map or {}).get(service_key) or _service_label(service_key)
+            button = _btn_label(base_name, total, stale=is_stale)
+            rows.append((button, service_key, total, is_stale))
 
-        labels = [name for name, _ in rows]
-        names = [name for name, _ in rows]
+        labels = [label for label, _, _, _ in rows]
+        names = [svc for _, svc, _, _ in rows]
         return labels, names
 
     @staticmethod
-    def _wallet_service_name(identifier: str) -> str:
-        return f"okx_wallet_{(identifier or '').strip().lower()}"
+    def _wallet_service_name(
+        identifier: str, provider: str = "okx_wallet", chain: str = ""
+    ) -> str:
+        """Return canonical service key for a DEX wallet.
+
+        Mapping:
+          okx_wallet + EVM address → evm_{addr}
+          okx_wallet + Solana      → sol_{addr}
+          tron_ton   + TRON        → tron_{addr}
+          tron_ton   + TON         → ton_{addr}
+          sui                      → sui_{addr}
+        """
+        addr = (identifier or "").strip().lower()
+        p = (provider or "").strip().lower()
+        c = (chain or "").strip().lower()
+        if p == "sui":
+            return f"sui_{addr}"
+        if p == "tron_ton":
+            if c == "tron":
+                return f"tron_{addr}"
+            return f"ton_{addr}"
+        # okx_wallet: distinguish by chain
+        if c == "solana":
+            return f"sol_{addr}"
+        return f"evm_{addr}"
 
     @staticmethod
     def _base_service_name(service: str) -> str:
         return str(service).split("#", 1)[0]
 
+    # Known service-name prefixes for wallet providers.
+    # IMPORTANT: longer/more-specific prefixes must come before shorter ones
+    # so that "tron_ton_" is stripped before "tron_" catches it.
+    _WALLET_SERVICE_PREFIXES = (
+        # legacy (longer) — must be before their canonical substrings
+        "okx_wallet_",
+        "tron_ton_",
+        # canonical
+        "evm_",
+        "sol_",
+        "tron_",
+        "ton_",
+        "sui_",
+    )
+
     @classmethod
     def _wallet_address_from_service(cls, service: str) -> str:
         base = cls._base_service_name(service)
-        if base.startswith("okx_wallet_"):
-            return base.removeprefix("okx_wallet_")
+        for prefix in cls._WALLET_SERVICE_PREFIXES:
+            if base.startswith(prefix):
+                return base.removeprefix(prefix)
         return ""
 
-    def _has_custom_integration_name(self, item: dict[str, Any]) -> bool:
-        name = str(item.get("name") or "").strip()
-        if not name:
-            return False
-        lowered = name.lower()
-        if lowered.startswith("okx_wallet_"):
-            return False
+    @classmethod
+    def _chain_from_service(cls, service: str) -> str:
+        """Infer chain name from service key prefix for auto-label fallback.
 
-        kind = str(item.get("kind") or "").strip().lower()
-        if kind != "dex":
-            return True
+        evm_      → ethereum  (resolves to EVM prefix via _CHAIN_LABELS)
+        sol_      → solana
+        tron_     → tron
+        ton_      → ton
+        sui_      → sui
+        okx_wallet_  → ethereum (legacy EVM)
+        tron_ton_    → tron or ton — detected from embedded address pattern:
+                       T[A-Z0-9]{33} → tron, UQ/EQ → ton
+        """
+        import re as _re
 
-        wallet_address = str(item.get("wallet_address") or "").strip()
-        short_address = self._short_address(wallet_address).lower()
-        chain = str(item.get("chain") or "").strip().lower()
-        auto_names = {
-            wallet_address.lower(),
-            short_address,
-            f"wallet {short_address}",
-            f"evm {short_address}",
-        }
-        if chain:
-            auto_names.add(f"{chain} {short_address}")
-        return lowered not in auto_names
+        base = cls._base_service_name(service)
+
+        # Legacy tron_ton_ must be checked FIRST — it starts with "tron_"
+        # so the canonical "tron_" check below would incorrectly match it.
+        if base.startswith("tron_ton_"):
+            addr = base.removeprefix("tron_ton_")
+            # TON addresses start with uq/eq (lower-cased here)
+            if addr.startswith("uq") or addr.startswith("eq"):
+                return "ton"
+            # TRON addresses start with 't' and are 34 chars
+            if addr.startswith("t") and len(addr) == 34:
+                return "tron"
+            return "tron"
+
+        if base.startswith("okx_wallet_"):
+            return "ethereum"
+
+        # Canonical prefixes
+        _CANONICAL: tuple[tuple[str, str], ...] = (
+            ("ton_", "ton"),
+            ("tron_", "tron"),
+            ("evm_", "ethereum"),
+            ("sol_", "solana"),
+            ("sui_", "sui"),
+        )
+        for prefix, chain in _CANONICAL:
+            if base.startswith(prefix):
+                return chain
+
+        return ""
 
     def _display_name_for_integration(self, item: dict[str, Any]) -> str:
-        name = str(item.get("name") or "").strip()
-        kind = str(item.get("kind") or "").strip().lower()
-
-        if self._has_custom_integration_name(item):
-            return name
-
-        if kind == "cex":
-            return self._default_cex_label(
-                str(item.get("exchange_code") or ""),
-                str(item.get("account_ref") or ""),
-            )
-
-        wallet_address = str(item.get("wallet_address") or "").strip()
-        if wallet_address:
-            return self._default_dex_label(wallet_address)
-
-        return (
-            name
-            or str(
-                item.get("exchange_code") or item.get("provider") or "source"
-            ).strip()
-        )
+        return _integration_label(item)
 
     @staticmethod
     def _integration_id_from_service_key(service: str) -> int | None:
@@ -1880,8 +2284,12 @@ class ScreenService:
         wallets: dict[str, dict[str, Any]],
         hide_small: bool,
         name_map: dict[str, str] | None = None,
+        stale_services: set[str] | None = None,
     ) -> list[str]:
         rows: list[tuple[str, float]] = []
+        normalized_stale = {
+            str(item).strip().lower() for item in (stale_services or set()) if item
+        }
         for service, acc in sorted(
             wallets.items(),
             key=lambda item: item[1].get("total_usd", 0),
@@ -1890,13 +2298,10 @@ class ScreenService:
             total = float(acc.get("total_usd", 0) or 0)
             if hide_small and total < settings.hide_small_balance_threshold:
                 continue
-            display = self._display_name_for_service(
-                service,
-                {"dex_wallets": wallets},
-                name_map=name_map,
-                include_total=False,
-            )
-            rows.append((display, total))
+            base_name = (name_map or {}).get(service) or _service_label(service)
+            is_stale = str(service).strip().lower() in normalized_stale
+            button = _btn_label(base_name, total, stale=is_stale)
+            rows.append((button, total))
         return [label for label, _ in rows]
 
     def _wallet_service_order(
@@ -1994,7 +2399,8 @@ class ScreenService:
                 or 0
             )
             label = resolved_name or self._default_dex_label(
-                self._wallet_address_from_service(service)
+                self._wallet_address_from_service(service),
+                self._chain_from_service(service),
             )
             return f"{label}{': ' + msg.format_usd(total) if include_total else ''}"
         return resolved_name or self._base_service_name(service)
@@ -2005,25 +2411,16 @@ class ScreenService:
             return str(item.get("exchange_code") or "").strip().lower()
         wallet_address = str(item.get("wallet_address") or "").strip().lower()
         if wallet_address:
-            return self._wallet_service_name(wallet_address)
+            provider = str(item.get("provider") or "okx_wallet").strip().lower()
+            chain = str(item.get("chain") or "").strip().lower()
+            return self._wallet_service_name(wallet_address, provider, chain)
         return ""
 
     def _build_service_name_map(
         self, integrations: list[dict[str, Any]]
     ) -> dict[str, str]:
         """Map service key to normalized display labels for integrations."""
-        result: dict[str, str] = {}
-        for item in integrations:
-            if not isinstance(item, dict):
-                continue
-            service = self._service_name_from_integration(item)
-            if service:
-                display_name = self._display_name_for_integration(item)
-                result[service] = display_name
-                integration_id = item.get("id")
-                if integration_id is not None:
-                    result[f"{service}#{integration_id}"] = display_name
-        return result
+        return _build_name_map(integrations)
 
     @staticmethod
     def _integration_label(item: dict[str, Any]) -> str:

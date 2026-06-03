@@ -10,8 +10,15 @@ class TariffPlan:
     code: str
     name: str
     max_cex_accounts: int
-    max_evm_wallets: int
+    max_wallets: int
     refresh_interval_seconds: int
+    price_monthly: float = 0.0
+    currency: str = "USD"
+
+    @property
+    def max_evm_wallets(self) -> int:
+        """Legacy alias for max_wallets."""
+        return self.max_wallets
 
 
 TARIFF_PLANS: dict[str, TariffPlan] = {
@@ -19,29 +26,32 @@ TARIFF_PLANS: dict[str, TariffPlan] = {
         code="free",
         name="Free",
         max_cex_accounts=5,
-        max_evm_wallets=1,
+        max_wallets=1,
         refresh_interval_seconds=600,
     ),
     "low": TariffPlan(
         code="low",
         name="Low",
         max_cex_accounts=14,
-        max_evm_wallets=3,
+        max_wallets=3,
         refresh_interval_seconds=300,
+        price_monthly=5.0,
     ),
     "medium": TariffPlan(
         code="medium",
         name="Medium",
         max_cex_accounts=28,
-        max_evm_wallets=7,
+        max_wallets=7,
         refresh_interval_seconds=120,
+        price_monthly=10.0,
     ),
     "pro": TariffPlan(
         code="pro",
         name="Pro",
         max_cex_accounts=56,
-        max_evm_wallets=15,
+        max_wallets=15,
         refresh_interval_seconds=0,
+        price_monthly=20.0,
     ),
 }
 

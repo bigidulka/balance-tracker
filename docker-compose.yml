@@ -7,7 +7,7 @@ services:
 
   debank-sdk:
     build:
-      context: ../debank-sdk
+      context: ./debank-sdk
       dockerfile: backend/Dockerfile
     container_name: balance-tracker-debank-sdk
     environment:
@@ -30,6 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: balance-tracker-api
+    mem_limit: 1024m
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
@@ -38,6 +39,13 @@ services:
       - .env
     environment:
       - DATABASE_USE_SQLITE=true
+      - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
+      - BOT_PROXY=${BOT_PROXY:-}
+      - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
+      - ENABLE_INPROCESS_REFRESH_LOOP=false
+      - ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP=false
+      - ENABLE_WORKER=false
+      - ENABLE_INPROCESS_SYNC_WORKER=false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ping').read()"]
       interval: 10s
@@ -54,6 +62,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: balance-tracker-worker
+    mem_limit: 1536m
     command: ["python", "-m", "app.worker"]
     volumes:
       - ./data:/app/data
@@ -61,11 +70,40 @@ services:
       - .env
     environment:
       - DATABASE_USE_SQLITE=true
+      - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
+      - BOT_PROXY=${BOT_PROXY:-}
+      - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
       - ENABLE_INPROCESS_REFRESH_LOOP=${ENABLE_INPROCESS_REFRESH_LOOP:-false}
       - ENABLE_WORKER=${ENABLE_WORKER:-true}
       - ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP=${ENABLE_LEGACY_BACKGROUND_REFRESH_LOOP:-false}
       - ENABLE_INPROCESS_SYNC_WORKER=${ENABLE_INPROCESS_SYNC_WORKER:-true}
       - SYNC_WORKER_POLL_INTERVAL_SECONDS=${SYNC_WORKER_POLL_INTERVAL_SECONDS:-2.0}
+      - JOB_PARALLELISM=${JOB_PARALLELISM:-2}
+    depends_on:
+      debank-sdk:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: balance-tracker-scheduler
+    mem_limit: 512m
+    command: ["python", "-m", "app.scheduler"]
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_USE_SQLITE=true
+      - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
+      - BOT_PROXY=${BOT_PROXY:-}
+      - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
+      - ENABLE_REFRESH_SCHEDULER=${ENABLE_REFRESH_SCHEDULER:-true}
+      - REFRESH_SCHEDULER_POLL_INTERVAL_SECONDS=${REFRESH_SCHEDULER_POLL_INTERVAL_SECONDS:-30}
+      - REFRESH_SCHEDULER_MIN_INTERVAL_SECONDS=${REFRESH_SCHEDULER_MIN_INTERVAL_SECONDS:-60}
+      - REFRESH_SCHEDULER_BATCH_SIZE=${REFRESH_SCHEDULER_BATCH_SIZE:-20}
     depends_on:
       debank-sdk:
         condition: service_healthy
@@ -76,6 +114,7 @@ services:
       context: ./bot
       dockerfile: Dockerfile
     container_name: balance-tracker-bot
+    mem_limit: 512m
     depends_on:
       api:
         condition: service_healthy
@@ -92,7 +131,8 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - ALLOWED_USERS=${ALLOWED_USERS:-}
       - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
-      - DEBANK_SDK_URL=http://debank-sdk:8080
+      - DEBANK_SDK_URL=${DEBANK_SDK_URL:-http://debank-sdk:8080}
+      - BOT_PROXY=${BOT_PROXY:-}
     restart: unless-stopped
 
 volumes:

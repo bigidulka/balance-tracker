@@ -4,18 +4,54 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+import time
 
 from bot.api_client import api_client
 
 
 class ApiRepository:
+    def __init__(self) -> None:
+        self._cache: dict[str, Any] = {}
+        self._cache_ts: dict[str, float] = {}
+        self._ttl_seconds: dict[str, float] = {
+            "dashboard_summary": 3.0,
+            "integrations": 10.0,
+            "billing_current": 60.0,
+            "capabilities": 60.0,
+        }
+
+    def _cache_get(self, key: str) -> Any | None:
+        ts = self._cache_ts.get(key, 0.0)
+        ttl = self._ttl_seconds.get(key, 0.0)
+        if ttl > 0 and time.monotonic() - ts < ttl and key in self._cache:
+            return self._cache[key]
+        return None
+
+    def _cache_put(self, key: str, value: Any) -> Any:
+        self._cache[key] = value
+        self._cache_ts[key] = time.monotonic()
+        return value
+
+    def invalidate(self, *keys: str) -> None:
+        target_keys = keys or tuple(self._cache.keys())
+        for key in target_keys:
+            self._cache.pop(key, None)
+            self._cache_ts.pop(key, None)
     async def get_capabilities(self) -> dict[str, Any]:
+        cached = self._cache_get("capabilities")
+        if isinstance(cached, dict):
+            return cached
         payload = await api_client.get_capabilities()
-        return payload if isinstance(payload, dict) else {}
+        value = payload if isinstance(payload, dict) else {}
+        return self._cache_put("capabilities", value)
 
     async def get_billing_current(self) -> dict[str, Any]:
+        cached = self._cache_get("billing_current")
+        if isinstance(cached, dict):
+            return cached
         payload = await api_client.get_billing_current()
-        return payload if isinstance(payload, dict) else {}
+        value = payload if isinstance(payload, dict) else {}
+        return self._cache_put("billing_current", value)
 
     async def get_billing_plans(self) -> dict[str, Any]:
         payload = await api_client.get_billing_plans()
@@ -69,8 +105,12 @@ class ApiRepository:
         return payload if isinstance(payload, dict) else {}
 
     async def get_dashboard_summary(self) -> dict[str, Any]:
+        cached = self._cache_get("dashboard_summary")
+        if isinstance(cached, dict):
+            return cached
         payload = await api_client.get_dashboard_summary()
-        return payload if isinstance(payload, dict) else {}
+        value = payload if isinstance(payload, dict) else {}
+        return self._cache_put("dashboard_summary", value)
 
     async def get_balances(self, *, force_update_cache: bool = False) -> dict[str, Any]:
         from bot.services.balance import get_balance_data
@@ -79,6 +119,12 @@ class ApiRepository:
 
     async def refresh_balances(self) -> dict[str, Any]:
         payload = await api_client.refresh()
+        self.invalidate("dashboard_summary")
+        from bot.services.balance import invalidate_balance_cache
+
+        # Refresh endpoint may be queued; drop local hot cache so next render can
+        # pick up newer cached backend state once worker finishes.
+        invalidate_balance_cache(api_client.current_identity_cache_key())
         return payload if isinstance(payload, dict) else {}
 
     async def get_transactions(
@@ -108,8 +154,12 @@ class ApiRepository:
         return payload if isinstance(payload, dict) else {}
 
     async def get_integrations(self) -> list[dict[str, Any]]:
+        cached = self._cache_get("integrations")
+        if isinstance(cached, list):
+            return cached
         payload = await api_client.get_integrations(include_inactive=True)
-        return payload if isinstance(payload, list) else []
+        value = payload if isinstance(payload, list) else []
+        return self._cache_put("integrations", value)
 
     async def verify_integration_credentials(
         self, payload: dict[str, Any]
@@ -119,22 +169,27 @@ class ApiRepository:
 
     async def create_integration(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = await api_client.create_integration(payload)
+        self.invalidate("integrations", "dashboard_summary", "billing_current", "capabilities")
         return response if isinstance(response, dict) else {}
 
     async def activate_integration(self, integration_id: int) -> dict[str, Any]:
         payload = await api_client.activate_integration(integration_id)
+        self.invalidate("integrations", "dashboard_summary")
         return payload if isinstance(payload, dict) else {}
 
     async def deactivate_integration(self, integration_id: int) -> dict[str, Any]:
         payload = await api_client.deactivate_integration(integration_id)
+        self.invalidate("integrations", "dashboard_summary")
         return payload if isinstance(payload, dict) else {}
 
     async def refresh_integration(self, integration_id: int) -> dict[str, Any]:
         payload = await api_client.refresh_integration(integration_id)
+        self.invalidate("dashboard_summary")
         return payload if isinstance(payload, dict) else {}
 
     async def delete_integration(self, integration_id: int) -> dict[str, Any]:
         payload = await api_client.delete_integration(integration_id)
+        self.invalidate("integrations", "dashboard_summary", "billing_current", "capabilities")
         return payload if isinstance(payload, dict) else {}
 
     async def update_integration(

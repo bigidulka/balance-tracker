@@ -84,7 +84,7 @@ def _items_or_default(locale: str, rows: list[Text], empty_key: str) -> list[Tex
     return [Text(t(locale, empty_key))]
 
 
-def dashboard_text(summary: dict[str, Any], *, locale: str = "ru") -> Text:
+def dashboard_text(summary: dict[str, Any], *, locale: str = "ru", currency_label: str = "") -> Text:
     total = float(summary.get("total_usd") or 0.0)
     exchanges_count = int(summary.get("exchanges_count") or 0)
     spot_total = float(summary.get("spot_total") or 0.0)
@@ -109,29 +109,76 @@ def dashboard_text(summary: dict[str, Any], *, locale: str = "ru") -> Text:
         else t(locale, "refresh_cooldown", seconds=retry_after)
     )
 
-    return Text(
+    status_pairs = [
+        (t(locale, "total"), format_usd(total)),
+        (t(locale, "exchanges"), str(exchanges_count)),
+        (t(locale, "spot"), format_usd(spot_total)),
+        (t(locale, "futures"), format_usd(futures_total)),
+        (t(locale, "dex_wallet"), format_usd(dex_total)),
+        (
+            t(locale, "integrations"),
+            f"{integrations_active}/{integrations_total} {t(locale, 'active')}",
+        ),
+        (
+            t(locale, "transactions"),
+            t(locale, "transactions_coming_soon"),
+        ),
+        (t(locale, "plan"), plan_name),
+        (t(locale, "refresh"), refresh_state),
+        (t(locale, "freshness"), freshness),
+    ]
+    # Insert additional currency conversion after total if available.
+    if currency_label:
+        status_pairs.insert(1, (t(locale, "additional_currency"), currency_label))
+
+    # Trader metrics section
+    pnl_today_val = summary.get("pnl_today", summary.get("pnl_24h"))
+    pnl_today_pct_val = summary.get("pnl_today_pct", summary.get("pnl_24h_pct"))
+    pnl_7d_val = summary.get("pnl_7d")
+    pnl_7d_pct_val = summary.get("pnl_7d_pct")
+    pnl_30d_val = summary.get("pnl_30d")
+    pnl_30d_pct_val = summary.get("pnl_30d_pct")
+
+    trader_pairs: list[tuple[str, str]] = []
+
+    def _append_pnl(label_key: str, value: Any, pct_value: Any) -> None:
+        if value is None:
+            return
+        numeric = float(value)
+        if abs(numeric) < 0.005:
+            return
+        sign = "+" if numeric >= 0 else ""
+        pct = (
+            f" ({sign}{float(pct_value):.1f}%)"
+            if pct_value is not None
+            else ""
+        )
+        trader_pairs.append((t(locale, label_key), f"{sign}{format_usd(numeric)}{pct}"))
+
+    _append_pnl("pnl_today", pnl_today_val, pnl_today_pct_val)
+    _append_pnl("pnl_7d", pnl_7d_val, pnl_7d_pct_val)
+    _append_pnl("pnl_30d", pnl_30d_val, pnl_30d_pct_val)
+
+    blocks: list[Any] = [
         _heading("📊", "dashboard", t(locale, "dashboard_title")),
         "\n\n",
         _section_with_pairs(
             t(locale, "status"),
-            (t(locale, "total"), format_usd(total)),
-            (t(locale, "exchanges"), str(exchanges_count)),
-            (t(locale, "spot"), format_usd(spot_total)),
-            (t(locale, "futures"), format_usd(futures_total)),
-            (t(locale, "dex_wallet"), format_usd(dex_total)),
-            (
-                t(locale, "integrations"),
-                f"{integrations_active}/{integrations_total} {t(locale, 'active')}",
-            ),
-            (
-                t(locale, "transactions"),
-                t(locale, "transactions_coming_soon"),
-            ),
-            (t(locale, "plan"), plan_name),
-            (t(locale, "refresh"), refresh_state),
-            (t(locale, "freshness"), freshness),
+            *status_pairs,
         ),
-    )
+    ]
+    if trader_pairs:
+        blocks.extend([
+            "\n\n",
+            _section_with_pairs(
+                t(locale, "trader_metrics"),
+                *trader_pairs,
+            ),
+        ])
+
+    return Text(*blocks)
+
+
 
 
 def balance_overview_text(
@@ -541,6 +588,45 @@ def _provider_display(value: str) -> str:
     return _PROVIDER_DISPLAY.get(raw, raw)
 
 
+def _integration_type_label(item: dict[str, Any]) -> str:
+    """Human-readable type label for integration list body.
+
+    CEX → exchange label ("Binance", "OKX", …) — already in display_name
+    DEX → chain prefix ("EVM", "SOL", "TRX", "TON", "SUI")
+    """
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind == "cex":
+        return "CEX"
+    # DEX: derive from chain first, then provider
+    chain = str(item.get("chain") or "").strip().lower()
+    _CHAIN_TYPE: dict[str, str] = {
+        "ethereum": "EVM",
+        "bsc": "EVM",
+        "polygon": "EVM",
+        "arbitrum": "EVM",
+        "optimism": "EVM",
+        "base": "EVM",
+        "avalanche": "EVM",
+        "fantom": "EVM",
+        "gnosis": "EVM",
+        "zksync": "EVM",
+        "linea": "EVM",
+        "scroll": "EVM",
+        "mantle": "EVM",
+        "blast": "EVM",
+        "taiko": "EVM",
+        "solana": "SOL",
+        "tron": "TRX",
+        "ton": "TON",
+        "sui": "SUI",
+    }
+    if chain and chain in _CHAIN_TYPE:
+        return _CHAIN_TYPE[chain]
+    # Fallback to provider mapping
+    provider = str(item.get("provider") or "").strip().lower()
+    return _PROVIDER_DISPLAY.get(provider, provider.upper() if provider else "DEX")
+
+
 def integrations_text(
     items: list[dict[str, Any]],
     *,
@@ -559,7 +645,7 @@ def integrations_text(
     total_pages = max(1, math.ceil(total / per_page)) if total else 1
     lines = [
         Text(
-            f"{(item.get('display_name') or item.get('name') or ('integration-' + str(item.get('id', '?'))))} [{_provider_display(str(item.get('provider', 'unknown')))}]"
+            f"{(item.get('display_name') or item.get('name') or ('integration-' + str(item.get('id', '?'))))} [{_integration_type_label(item)}]"
             f" - {t(locale, 'active') if item.get('is_active') else t(locale, 'inactive')}"
         )
         for item in page_items
@@ -567,7 +653,7 @@ def integrations_text(
     status_pairs: list[tuple[str, str]] = [
         (t(locale, "total"), str(total)),
         (t(locale, "cex_accounts"), f"{cex_used}/{cex_limit}"),
-        (t(locale, "evm_wallets"), f"{evm_used}/{evm_limit}"),
+        (t(locale, "wallets"), f"{evm_used}/{evm_limit}"),
     ]
     if total_pages > 1:
         status_pairs.append((t(locale, "page"), f"{page + 1}/{total_pages}"))
@@ -624,8 +710,16 @@ def integration_wallet_picker_text(*, locale: str = "ru") -> Text:
 
 
 _PROVIDER_DISPLAY: dict[str, str] = {
-    "okx_wallet": "debank",
+    # DEX wallet providers → human-readable label
+    "debank": "EVM",
+    "okx_wallet": "SOL",
+    "tron_ton": "TRON/TON",
+    "sui": "SUI",
+    # CEX
+    "ccxt": "CEX",
+    "cryptobot": "CryptoBot",
 }
+
 
 _CHAIN_DISPLAY: dict[str, str] = {
     "ethereum": "evm",
@@ -639,6 +733,9 @@ _CHAIN_DISPLAY: dict[str, str] = {
     "gnosis": "evm",
     "zksync": "evm",
     "linea": "evm",
+    "solana": "solana",
+    "tron": "tron",
+    "ton": "ton",
 }
 
 
@@ -704,8 +801,15 @@ def integration_detail_text(
 
 
 def settings_text(
-    hide_small: bool, threshold: float, language: str, *, locale: str = "ru"
+    hide_small: bool,
+    threshold: float,
+    language: str,
+    *,
+    locale: str = "ru",
+    display_currency: str = "USD",
 ) -> Text:
+    from bot.services.fx_rates import currency_label as _fx_label
+    currency_display = _fx_label(display_currency, locale)
     return Text(
         _heading("⚙️", "settings", t(locale, "settings")),
         "\n\n",
@@ -716,6 +820,7 @@ def settings_text(
         _section_with_pairs(
             t(locale, "status"),
             (t(locale, "language"), t(language, "language_name")),
+            (t(locale, "display_currency"), currency_display),
             (
                 t(locale, "hide_small_balances"),
                 t(locale, "on") if hide_small else t(locale, "off"),
@@ -723,6 +828,7 @@ def settings_text(
             (t(locale, "threshold"), format_usd(threshold)),
         ),
     )
+
 
 
 def plan_text(
@@ -756,7 +862,7 @@ def plan_text(
     status_lines = [
         f"{t(locale, 'current_plan')}: {plan_name} ({plan_code.upper()})",
         f"{t(locale, 'cex_accounts')}: {cex_used}/{cex_limit}",
-        f"{t(locale, 'evm_wallets')}: {evm_used}/{evm_limit}",
+        f"{t(locale, 'wallets')}: {evm_used}/{evm_limit}",
         refresh_line,
         f"{t(locale, 'refresh')}: {refresh_state}",
         f"{t(locale, 'balance_wallet')}: {format_usd(wallet_balance_usd)}",
@@ -790,7 +896,9 @@ def plan_text(
             else {}
         )
         item_cex_limit = int(item_limits.get("max_cex_accounts") or 0)
-        item_evm_limit = int(item_limits.get("max_evm_wallets") or 0)
+        item_wallet_limit = int(
+            item_limits.get("max_wallets") or item_limits.get("max_evm_wallets") or 0
+        )
         item_refresh = format_interval(
             int(
                 item_background.get("refresh_interval_seconds")
@@ -806,7 +914,7 @@ def plan_text(
         )
         plan_rows.append(
             Text(
-                f"{item_name} ({item_code.upper()}) · {item_cex_limit} CEX · {item_evm_limit} EVM · {item_refresh} · {suffix}"
+                f"{item_name} ({item_code.upper()}) · {item_cex_limit} CEX · {item_wallet_limit} {t(locale, 'wallets')} · {item_refresh} · {suffix}"
             )
         )
     if plan_rows:
@@ -959,6 +1067,18 @@ def payments_text(
             t(locale, "status"),
             (t(locale, "balance_wallet"), format_usd(balance_usd)),
             (t(locale, "invoices"), str(len(invoices))),
+        ),
+        "\n\n",
+        _section_with_pairs(
+            "CryptoBot" if locale == "en" else "CryptoBot",
+            (
+                "User wallet" if locale == "en" else "Кошелек пользователя",
+                "Open CryptoBot directly" if locale == "en" else "Открыть CryptoBot напрямую",
+            ),
+            (
+                "App wallet top-up" if locale == "en" else "Пополнение кошелька приложения",
+                "Create invoice for app balance" if locale == "en" else "Создать чек для баланса приложения",
+            ),
         ),
     ]
     if active_invoice:

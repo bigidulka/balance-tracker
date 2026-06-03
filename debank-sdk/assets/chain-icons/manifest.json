@@ -1,0 +1,660 @@
+[
+  {
+    "id": "eth",
+    "name": "Ethereum",
+    "file": "eth.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/eth/850324c2e33d8899732706ec997a2ade"
+  },
+  {
+    "id": "bsc",
+    "name": "BNB Chain",
+    "file": "bsc.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/bsc/5d5ab0fb170a8d6cee4ed35fb9adb9d5.svg"
+  },
+  {
+    "id": "xdai",
+    "name": "Gnosis Chain",
+    "file": "xdai.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/xdai/ea1318df7b1168b7103f183e2f164f89.svg"
+  },
+  {
+    "id": "matic",
+    "name": "Polygon",
+    "file": "matic.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/matic/23c7506846e5472737e5773796afde0c.svg"
+  },
+  {
+    "id": "ftm",
+    "name": "Fantom",
+    "file": "ftm.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/ftm/9c7504f08940008224da664445cf1c24.svg"
+  },
+  {
+    "id": "avax",
+    "name": "Avalanche",
+    "file": "avax.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/avax/c718c2529ab7bdf9a29a6be3f0cf44bb.svg"
+  },
+  {
+    "id": "op",
+    "name": "OP",
+    "file": "op.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/op/325277c459aaa99e0fce676794d1af95.svg"
+  },
+  {
+    "id": "arb",
+    "name": "Arbitrum",
+    "file": "arb.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/arb/c08de6d44dc63eb0fa1cd42babaf3fad.svg"
+  },
+  {
+    "id": "celo",
+    "name": "Celo",
+    "file": "celo.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/celo/d74d93167ff6b7b016939cd8b96133e6.svg"
+  },
+  {
+    "id": "movr",
+    "name": "Moonriver",
+    "file": "movr.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/movr/bc8e8ad0e023ce0eac03661952743288.svg"
+  },
+  {
+    "id": "cro",
+    "name": "Cronos",
+    "file": "cro.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/cro/e715c17180e15a0fc4ec920da4c4998a.svg"
+  },
+  {
+    "id": "boba",
+    "name": "Boba",
+    "file": "boba.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/boba/408985c51933fbdd7b98725537ab87e7"
+  },
+  {
+    "id": "metis",
+    "name": "Metis",
+    "file": "metis.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/metis/d4128b02480caaacb03e213495fe582a.svg"
+  },
+  {
+    "id": "mobm",
+    "name": "Moonbeam",
+    "file": "mobm.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/mobm/2553797490f5b27c6086f54d67401c15.svg"
+  },
+  {
+    "id": "fuse",
+    "name": "Fuse",
+    "file": "fuse.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/fuse/47333f741890df275124c555f341d9bf.svg"
+  },
+  {
+    "id": "klay",
+    "name": "Kaia",
+    "file": "klay.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/klay/f7c903028a2169e73b58b9d91b32cd7c.svg"
+  },
+  {
+    "id": "astar",
+    "name": "Astar",
+    "file": "astar.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/astar/e1efd2cbe4234cbbbfc44d1fddfdfa53"
+  },
+  {
+    "id": "iotx",
+    "name": "IoTeX",
+    "file": "iotx.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/iotx/edb52afe3bee8098f21352509eb6f4f6"
+  },
+  {
+    "id": "rsk",
+    "name": "Rootstock",
+    "file": "rsk.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/rsk/0451eec282d1526c087a7a28174c70f7.svg"
+  },
+  {
+    "id": "dfk",
+    "name": "DFK",
+    "file": "dfk.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/dfk/8ed59ac9d2025f14e7e5edcddff17e77"
+  },
+  {
+    "id": "tlos",
+    "name": "Telos EVM",
+    "file": "tlos.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/tlos/52adfd496eadabdfbaecff651d16e9ed.svg"
+  },
+  {
+    "id": "nova",
+    "name": "Arbitrum Nova",
+    "file": "nova.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/nova/9250f8c2030d4e314e60b62f778e6be6"
+  },
+  {
+    "id": "canto",
+    "name": "Canto",
+    "file": "canto.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/canto/ab43408cab3a5ca823f676a5ca56db46"
+  },
+  {
+    "id": "doge",
+    "name": "Dogechain",
+    "file": "doge.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/doge/a80bd29d7fe15efeadac05c129990bf0"
+  },
+  {
+    "id": "kava",
+    "name": "Kava",
+    "file": "kava.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/kava/6205ef7916d96f29c243ec53e7b0ca7b.svg"
+  },
+  {
+    "id": "cfx",
+    "name": "Conflux",
+    "file": "cfx.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/cfx/a7169eda33ba6418e018f74000553687"
+  },
+  {
+    "id": "era",
+    "name": "zkSync Era",
+    "file": "era.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/era/0158fcab319c06eeeef40969f91cbf68.svg"
+  },
+  {
+    "id": "ron",
+    "name": "Ronin",
+    "file": "ron.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/ron/61cd00f8e453736c9e6c58a4e73484cf.svg"
+  },
+  {
+    "id": "core",
+    "name": "CORE",
+    "file": "core.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/core/4a2611987ec9df8debeeadeb3c3acd93.svg"
+  },
+  {
+    "id": "wemix",
+    "name": "WEMIX",
+    "file": "wemix.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/wemix/6438a3e18dff7585464133515e29e936.svg"
+  },
+  {
+    "id": "flr",
+    "name": "Flare",
+    "file": "flr.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/flr/ad24dee9f617eeddb55405c94c9f3250.svg"
+  },
+  {
+    "id": "oas",
+    "name": "Oasys",
+    "file": "oas.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/oas/bf158bd10db484849226909692d69890.svg"
+  },
+  {
+    "id": "zora",
+    "name": "Zora",
+    "file": "zora.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/zora/be2b1beb37fca89bff3d123d24d372af.svg"
+  },
+  {
+    "id": "base",
+    "name": "Base",
+    "file": "base.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/base/41b61e600f77335d9b2445a6cd4ffc06.svg"
+  },
+  {
+    "id": "linea",
+    "name": "Linea",
+    "file": "linea.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/linea/7f0ff82160953e3fe00d287c4cbda761.svg"
+  },
+  {
+    "id": "mnt",
+    "name": "Mantle",
+    "file": "mnt.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/mnt/f7c57b2c2ea12182456c8b0a464c256b.svg"
+  },
+  {
+    "id": "manta",
+    "name": "Manta Pacific",
+    "file": "manta.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/manta/c6dfe2145316df3a12cfaa3bd8d10276.svg"
+  },
+  {
+    "id": "scrl",
+    "name": "Scroll",
+    "file": "scrl.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/scrl/b25e1878530cb3941df76d38575ddc3b.svg"
+  },
+  {
+    "id": "opbnb",
+    "name": "opBNB",
+    "file": "opbnb.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/opbnb/c87b3a7d9358f0d1996abca499cdfbc5.svg"
+  },
+  {
+    "id": "shib",
+    "name": "Shibarium",
+    "file": "shib.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/shib/9d78452653c0c5649e5c65efe33636d7.svg"
+  },
+  {
+    "id": "mode",
+    "name": "Mode",
+    "file": "mode.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/mode/f6bf3012ec367ba86f301faed9991dc0.svg"
+  },
+  {
+    "id": "zeta",
+    "name": "ZetaChain",
+    "file": "zeta.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/zeta/4dc42eb132e51675152f0be1633b4932.svg"
+  },
+  {
+    "id": "rari",
+    "name": "RARI",
+    "file": "rari.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/rari/475648d82b5e56cc9f9801430280ec2d.svg"
+  },
+  {
+    "id": "merlin",
+    "name": "Merlin",
+    "file": "merlin.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/merlin/224218517d60b31f44cd80e98ba38665.svg"
+  },
+  {
+    "id": "blast",
+    "name": "Blast",
+    "file": "blast.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/blast/689f40d4fef27db4b88a9e3d6de452f4.svg"
+  },
+  {
+    "id": "frax",
+    "name": "Fraxtal",
+    "file": "frax.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/frax/b5f2b68d689f8bf7936db7b57e079dfe.svg"
+  },
+  {
+    "id": "xlayer",
+    "name": "X Layer",
+    "file": "xlayer.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/xlayer/1e41e9efb83d7e29784df467c49cd392.svg"
+  },
+  {
+    "id": "itze",
+    "name": "Immutable zkEVM",
+    "file": "itze.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/itze/8d7fb07195aeeb00bdd66fd1e323345e.svg"
+  },
+  {
+    "id": "btr",
+    "name": "Bitlayer",
+    "file": "btr.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/btr/e302bed5ffa4fcab5227c6f1f68b2739.svg"
+  },
+  {
+    "id": "b2",
+    "name": "B²",
+    "file": "b2.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/b2/c2434a145a4ca26bffaf1634013d782c.svg"
+  },
+  {
+    "id": "bob",
+    "name": "BOB",
+    "file": "bob.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/bob/e4714c573357b2f6b409b7d647accb40.svg"
+  },
+  {
+    "id": "reya",
+    "name": "Reya",
+    "file": "reya.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/reya/ed63a0445832d68c5f2e3cbf187b5e3a.svg"
+  },
+  {
+    "id": "bb",
+    "name": "BounceBit",
+    "file": "bb.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/bb/26629d9762d8ef0597384484754aa43a.svg"
+  },
+  {
+    "id": "taiko",
+    "name": "Taiko",
+    "file": "taiko.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/taiko/b74e08101122632ada65af24d691f274.svg"
+  },
+  {
+    "id": "cyber",
+    "name": "Cyber",
+    "file": "cyber.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/cyber/5921571e67cd9c67bbd95a160cfd815f.svg"
+  },
+  {
+    "id": "sei",
+    "name": "Sei",
+    "file": "sei.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/sei/dd4fe41672236945e382fe436a5d1e1b.svg"
+  },
+  {
+    "id": "chiliz",
+    "name": "Chiliz",
+    "file": "chiliz.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/chiliz/b5dae2e3409a45625752743d8464d9ca.svg"
+  },
+  {
+    "id": "dbk",
+    "name": "DBK Chain",
+    "file": "dbk.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/dbk/678d86daf113360d2f6088cb7939422f.svg"
+  },
+  {
+    "id": "croze",
+    "name": "Cronos zkEVM",
+    "file": "croze.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/croze/0cb8660877c5157ae832cd7bf94bb0e1.svg"
+  },
+  {
+    "id": "gravity",
+    "name": "Gravity",
+    "file": "gravity.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/gravity/24fff88f9492ba8412342621dc01123c.svg"
+  },
+  {
+    "id": "lisk",
+    "name": "Lisk",
+    "file": "lisk.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/lisk/34ff6a8fbf7215e4a86076b82bdf356e.svg"
+  },
+  {
+    "id": "orderly",
+    "name": "Orderly",
+    "file": "orderly.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/orderly/69f1f7ea35fbff0ea6fa4254aa1bfb10.svg"
+  },
+  {
+    "id": "ape",
+    "name": "ApeChain",
+    "file": "ape.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/ape/873c5b4eb533f85243bd8583ba1e3bf9.svg"
+  },
+  {
+    "id": "ethlink",
+    "name": "Etherlink",
+    "file": "ethlink.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/ethlink/9dc93da4c9d87bf5b28ee8245e384895.svg"
+  },
+  {
+    "id": "zircuit",
+    "name": "Zircuit",
+    "file": "zircuit.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/zircuit/84c93cda5f14f3b711a88d1153d0b511.svg"
+  },
+  {
+    "id": "world",
+    "name": "World Chain",
+    "file": "world.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/world/cbd8055dc0e4453fd0b34cc205b71991.svg"
+  },
+  {
+    "id": "morph",
+    "name": "Morph",
+    "file": "morph.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/morph/9395221629abf6bb43e1c55da1292864.svg"
+  },
+  {
+    "id": "swell",
+    "name": "SwellChain",
+    "file": "swell.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/swell/ef863121084c770635586455480b5dde.svg"
+  },
+  {
+    "id": "sonic",
+    "name": "Sonic",
+    "file": "sonic.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/sonic/878bde237071759589b68957adff4b1c.svg"
+  },
+  {
+    "id": "corn",
+    "name": "Corn",
+    "file": "corn.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/corn/3e5aabbb4f3a08a7f9f9b7f556f60aba.svg"
+  },
+  {
+    "id": "hsk",
+    "name": "HashKey",
+    "file": "hsk.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/hsk/7f0fb96758104f0ec642daefe989525a.svg"
+  },
+  {
+    "id": "ink",
+    "name": "Ink",
+    "file": "ink.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/ink/2985c51b194d6ea5629fc78f8daa0a3e.svg"
+  },
+  {
+    "id": "sophon",
+    "name": "Sophon",
+    "file": "sophon.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/sophon/04cb5f85bf17c324f92105e4b8b710ab.svg"
+  },
+  {
+    "id": "duck",
+    "name": "DuckChain",
+    "file": "duck.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/duck/8b87b0124e988487bc2122a323585080.svg"
+  },
+  {
+    "id": "abs",
+    "name": "Abstract",
+    "file": "abs.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/abs/a536cad41433ace52c5aa62a2226eaa7.svg"
+  },
+  {
+    "id": "soneium",
+    "name": "Soneium",
+    "file": "soneium.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/soneium/59129bd9ef278d5952c18d396ee7bab1.svg"
+  },
+  {
+    "id": "bera",
+    "name": "Berachain",
+    "file": "bera.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/bera/b57c34fe9051f29dcb5cd19d471d6b0c.svg"
+  },
+  {
+    "id": "uni",
+    "name": "Unichain",
+    "file": "uni.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/uni/c1983533056d966c2a32444092ce56c1.svg"
+  },
+  {
+    "id": "story",
+    "name": "Story",
+    "file": "story.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/story/e9cd9dc2561e5c2ee5a10d3d61a065a2.svg"
+  },
+  {
+    "id": "lens",
+    "name": "Lens",
+    "file": "lens.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/lens/3a99df1580b5e28ac24dc53998192079.svg"
+  },
+  {
+    "id": "hyper",
+    "name": "HyperEVM",
+    "file": "hyper.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/hyper/337778fee1dae830bc17d7900f0174e2.svg"
+  },
+  {
+    "id": "hemi",
+    "name": "Hemi",
+    "file": "hemi.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/hemi/78ce64a6bd913381cf300a86f666c568.svg"
+  },
+  {
+    "id": "plume",
+    "name": "Plume",
+    "file": "plume.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/plume/1db875d62b75ca2b2c1bd5e2fffb920a.svg"
+  },
+  {
+    "id": "katana",
+    "name": "Katana",
+    "file": "katana.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/katana/e8d83db03dc95c017b3c68cb55a98a3a.svg"
+  },
+  {
+    "id": "xrpl",
+    "name": "XRPL EVM",
+    "file": "xrpl.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/xrpl/a0648242d4220f2cb608cc25a1f6fff5.svg"
+  },
+  {
+    "id": "goat",
+    "name": "GOAT",
+    "file": "goat.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/goat/229fa2ff38314d338f8f58e2733bbc3b.svg"
+  },
+  {
+    "id": "plasma",
+    "name": "Plasma",
+    "file": "plasma.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/plasma/23abb9da57097c716d532835361ffa57.svg"
+  },
+  {
+    "id": "tac",
+    "name": "TAC",
+    "file": "tac.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/tac/78eab03c914a033afe1a95a4dec77740.svg"
+  },
+  {
+    "id": "mito",
+    "name": "Mitosis",
+    "file": "mito.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/mito/187777eafc14446a19675f23f7176e63.svg"
+  },
+  {
+    "id": "monad",
+    "name": "Monad",
+    "file": "monad.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/monad/60d3030d54dae3b682dc23aa83ead1c9.svg"
+  },
+  {
+    "id": "botanix",
+    "name": "Botanix",
+    "file": "botanix.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/botanix/d1b2c22082ee32a95ffd29514180db6a.svg"
+  },
+  {
+    "id": "stable",
+    "name": "Stable",
+    "file": "stable.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/stable/ad71888adf71a8796a34e3faedb69796.svg"
+  },
+  {
+    "id": "g0",
+    "name": "0G",
+    "file": "g0.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/g0/0b65aeb1fac56e54dd3fbb3f793386cf.svg"
+  },
+  {
+    "id": "megaeth",
+    "name": "MegaETH",
+    "file": "megaeth.svg",
+    "variant": "svg_logo_url",
+    "source_url": "https://static.debank.com/image/chain/svg_logo_url/megaeth/36dc1e95af79bae7219b467b1e6362c2.svg"
+  }
+]
