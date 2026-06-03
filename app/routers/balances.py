@@ -41,6 +41,7 @@ from app.services.integration_service import IntegrationService
 from app.services.metrics_service import metrics_service
 from app.services.okx_wallet import okx_wallet_service
 from app.services.refresh_orchestrator import RefreshOrchestrator
+from app.services.response_cache import hot_response_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["balances"])
@@ -117,6 +118,22 @@ def _day_start_for_offset(now: datetime, utc_offset_minutes: int) -> datetime:
     return local_start - offset
 
 
+async def _invalidate_org_hot_cache(organization_id: int) -> None:
+    await hot_response_cache.invalidate_prefix(f"balances_cached:")
+    await hot_response_cache.invalidate_prefix(f"dashboard_summary:")
+
+
+def _db_cache_scope(db: AsyncSession) -> int:
+    return id(db.bind) if db.bind is not None else 0
+
+
+def _hot_cache_key(name: str, db: AsyncSession, organization_id: int, *parts: object) -> str:
+    suffix = ":".join(str(part) for part in parts)
+    if suffix:
+        suffix = f":{suffix}"
+    return f"{name}:{_db_cache_scope(db)}:{organization_id}{suffix}"
+
+
 @router.get("/balances", response_model=PortfolioResponse)
 async def get_balances(
     force_refresh: bool = Query(False, description="Force refresh from exchanges"),
@@ -134,6 +151,21 @@ async def get_cached_balances(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
+    return await hot_response_cache.get_or_set(
+        _hot_cache_key("balances_cached", db, organization_id),
+        ttl_seconds=settings.api_hot_cache_ttl_seconds,
+        loader=lambda: _get_cached_balances_uncached(
+            db=db,
+            organization_id=organization_id,
+        ),
+    )
+
+
+async def _get_cached_balances_uncached(
+    *,
+    db: AsyncSession,
+    organization_id: int,
+) -> PortfolioResponse:
     repo = BalanceRepository(db)
     balances = await repo.get_all_latest_balances(organization_id=organization_id)
     active_integrations = await IntegrationService(db).list_integrations(
@@ -240,6 +272,7 @@ async def refresh_balances(
         details={"updated_services": updated, "failed_services": failed},
     )
     metrics_service.inc("balances_refresh_total")
+    await _invalidate_org_hot_cache(organization_id)
 
     log = get_request_logger(
         logger,
@@ -418,6 +451,31 @@ async def get_dashboard_summary(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
+    return await hot_response_cache.get_or_set(
+        _hot_cache_key(
+            "dashboard_summary",
+            db,
+            organization_id,
+            include_metrics,
+            utc_offset_minutes,
+        ),
+        ttl_seconds=settings.api_hot_cache_ttl_seconds,
+        loader=lambda: _get_dashboard_summary_uncached(
+            include_metrics=include_metrics,
+            utc_offset_minutes=utc_offset_minutes,
+            db=db,
+            organization_id=organization_id,
+        ),
+    )
+
+
+async def _get_dashboard_summary_uncached(
+    *,
+    include_metrics: bool,
+    utc_offset_minutes: int,
+    db: AsyncSession,
+    organization_id: int,
+) -> DashboardSummaryResponse:
     balance_repo = BalanceRepository(db)
     balances = await balance_repo.get_all_latest_balances(
         organization_id=organization_id
