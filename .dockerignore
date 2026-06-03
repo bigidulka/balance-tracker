@@ -6,6 +6,12 @@ __pycache__/
 htmlcov/
 .idea/
 .vscode/
+.git/
+.git*
+.ralph/
+.agents/
+.codex/
+AGENTS.md
 venv/
 .venv/
 
