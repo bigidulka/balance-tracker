@@ -7,6 +7,7 @@ from typing import Any, Optional
 import aiohttp
 
 from app.core.config import get_settings
+from app.core.http import request_proxy_kwargs, session_kwargs
 from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema
 from app.services.debank_sdk_client import debank_sdk_client
 
@@ -37,13 +38,18 @@ class OKXWalletService:
         async with self._lock:
             if self._session is None or self._session.closed:
                 timeout = aiohttp.ClientTimeout(total=settings.request_timeout)
-                self._session = aiohttp.ClientSession(timeout=timeout)
+                self._session = aiohttp.ClientSession(**session_kwargs(timeout))
         return self._session
 
-    @staticmethod
-    def service_name_for(identifier: str) -> str:
+    @classmethod
+    def service_name_for(cls, identifier: str) -> str:
+        """Return canonical service key: evm_{addr} or sol_{addr}."""
         normalized = (identifier or "").strip().lower()
-        return f"okx_wallet_{normalized}"
+        family = cls._address_family((identifier or "").strip())
+        if family == "solana":
+            return f"sol_{normalized}"
+        # EVM (and unknown) → evm_ prefix
+        return f"evm_{normalized}"
 
     @staticmethod
     def legacy_service_name_for(identifier: str) -> str:
@@ -77,7 +83,9 @@ class OKXWalletService:
         }
 
     @staticmethod
-    def _to_service_balance(identifier: str, assets: list[AssetSchema]) -> ServiceBalanceSchema:
+    def _to_service_balance(
+        identifier: str, assets: list[AssetSchema]
+    ) -> ServiceBalanceSchema:
         total_usd = sum(asset.value_usd for asset in assets)
         account = AccountBalanceSchema(
             account_type="spot",
@@ -172,7 +180,9 @@ class OKXWalletService:
                     value_usd=existing.value_usd + value_usd,
                 )
             else:
-                parsed[symbol] = AssetSchema(coin=symbol, amount=amount, value_usd=value_usd)
+                parsed[symbol] = AssetSchema(
+                    coin=symbol, amount=amount, value_usd=value_usd
+                )
 
         return list(parsed.values())
 
@@ -181,12 +191,18 @@ class OKXWalletService:
         if family == "solana":
             return [self._SOLANA_CHAIN_ID]
         if family == "ton":
-            raise ValueError("TON wallets are not supported by the current live wallet pipeline")
+            raise ValueError(
+                "TON wallets are not supported by the current live wallet pipeline"
+            )
         if family == "tron":
-            raise ValueError("TRON wallets are not supported by the current live wallet pipeline")
+            raise ValueError(
+                "TRON wallets are not supported by the current live wallet pipeline"
+            )
         raise ValueError("Only Solana uses the live OKX priapi path")
 
-    def _build_priapi_wallet_payload(self, wallet_address: str, chain_id: int) -> dict[str, Any]:
+    def _build_priapi_wallet_payload(
+        self, wallet_address: str, chain_id: int
+    ) -> dict[str, Any]:
         return {
             "walletAddress": wallet_address,
             "limit": self.PRIAPI_LIMIT,
@@ -196,7 +212,9 @@ class OKXWalletService:
             "smallBalanceThreshold": self.PRIAPI_SMALL_BALANCE_THRESHOLD,
         }
 
-    async def _fetch_priapi_wallet_balance(self, wallet_address: str) -> ServiceBalanceSchema:
+    async def _fetch_priapi_wallet_balance(
+        self, wallet_address: str
+    ) -> ServiceBalanceSchema:
         session = await self._get_session()
         aggregated: dict[str, AssetSchema] = {}
 
@@ -206,6 +224,7 @@ class OKXWalletService:
                     self.PRIAPI_ACTIVE_POSITIONS_GUEST_URL,
                     json=self._build_priapi_wallet_payload(wallet_address, chain_id),
                     headers=self._default_headers(),
+                    **request_proxy_kwargs(),
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
@@ -236,7 +255,9 @@ class OKXWalletService:
 
         raise ValueError(f"OKX priapi returned no live assets for {wallet_address}")
 
-    async def _fetch_evm_wallet_balance(self, wallet_address: str) -> ServiceBalanceSchema:
+    async def _fetch_evm_wallet_balance(
+        self, wallet_address: str
+    ) -> ServiceBalanceSchema:
         balance = await debank_sdk_client.fetch_wallet_balance(wallet_address)
         return balance.model_copy(
             update={
@@ -256,12 +277,17 @@ class OKXWalletService:
         if family == "solana":
             return await self._fetch_priapi_wallet_balance(target)
         if family in {"ton", "tron"}:
-            raise ValueError(f"{family.upper()} wallets are not supported by the current live wallet pipeline")
+            # Delegate to TronGrid / tonapi.io pipeline (no API key required)
+            from app.services.tron_ton_service import tron_ton_service
+
+            return await tron_ton_service.fetch_wallet_balance(target)
         if settings.okx_wallet_legacy_enabled:
             raise ValueError(
                 "Legacy OKX wallet account-id mode was archived and must not be used in live refreshes"
             )
-        raise ValueError("Wallet address is required; legacy OKX wallet account ids are archived")
+        raise ValueError(
+            "Wallet address is required; legacy OKX wallet account ids are archived"
+        )
 
     async def fetch_all_wallets(
         self, identifiers: Optional[list[str]] = None

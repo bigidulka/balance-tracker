@@ -34,7 +34,19 @@ _MOCK_DASHBOARD_SUMMARY: Dict[str, Any] = {
     "transactions_24h": {"total": 0, "pending": 0},
     "freshness": "mock_preview_mode",
     "latest_updated_at": None,
+    "pnl_today": None,
+    "pnl_today_pct": None,
+    "pnl_24h": None,
+    "pnl_24h_pct": None,
+    "pnl_7d": None,
+    "pnl_7d_pct": None,
+    "pnl_30d": None,
+    "pnl_30d_pct": None,
+    "avg_daily_pnl": None,
+    "best_day_pnl": None,
+    "worst_day_pnl": None,
 }
+
 
 _MOCK_CAPABILITIES: Dict[str, Any] = {
     "plan": {"name": "UI Preview", "code": "ui_preview"},
@@ -54,6 +66,7 @@ _MOCK_BILLING_CURRENT: Dict[str, Any] = {
         "features": {"allow_dex": True},
         "limits": {
             "max_cex_accounts": 5,
+            "max_wallets": 1,
             "max_evm_wallets": 1,
             "min_refresh_interval_seconds": 600,
         },
@@ -61,17 +74,24 @@ _MOCK_BILLING_CURRENT: Dict[str, Any] = {
     },
     "limits": {
         "max_cex_accounts": 5,
+        "max_wallets": 1,
         "max_evm_wallets": 1,
     },
     "background": {"enabled": True, "refresh_interval_seconds": 600},
     "usage": {
         "cex": {"active": 0, "remaining": 5, "limit_reached": False},
-        "evm": {"active": 0, "remaining": 1, "limit_reached": False},
+        "evm": {"active": 0, "remaining": 0, "limit_reached": False},
+        "wallets": {"active": 0, "remaining": 1, "limit_reached": False},
         "non_evm_dex": {"active": 0},
         "integrations": {"active": 0, "remaining": 6, "limit_reached": False},
     },
     "throttling": {"min_refresh_interval_seconds": 600, "retry_after_seconds": 0},
-    "capabilities": {"allow_dex": True, "refresh": True, "can_refresh": True},
+    "capabilities": {
+        "allow_dex": True,
+        "refresh": True,
+        "can_refresh": True,
+        "can_add_wallet": True,
+    },
     "wallet": {"currency": "USD", "available": 0.0, "entries": []},
     "last_refresh_at": None,
 }
@@ -86,6 +106,7 @@ _MOCK_BILLING_PLANS: Dict[str, Any] = {
             "policy": {
                 "limits": {
                     "max_cex_accounts": 5,
+                    "max_wallets": 1,
                     "max_evm_wallets": 1,
                     "min_refresh_interval_seconds": 600,
                 },
@@ -95,11 +116,12 @@ _MOCK_BILLING_PLANS: Dict[str, Any] = {
         {
             "code": "low",
             "name": "Low",
-            "price_monthly": 0,
+            "price_monthly": 5,
             "currency": "USD",
             "policy": {
                 "limits": {
                     "max_cex_accounts": 14,
+                    "max_wallets": 3,
                     "max_evm_wallets": 3,
                     "min_refresh_interval_seconds": 300,
                 },
@@ -109,11 +131,12 @@ _MOCK_BILLING_PLANS: Dict[str, Any] = {
         {
             "code": "medium",
             "name": "Medium",
-            "price_monthly": 0,
+            "price_monthly": 10,
             "currency": "USD",
             "policy": {
                 "limits": {
                     "max_cex_accounts": 28,
+                    "max_wallets": 7,
                     "max_evm_wallets": 7,
                     "min_refresh_interval_seconds": 120,
                 },
@@ -123,11 +146,12 @@ _MOCK_BILLING_PLANS: Dict[str, Any] = {
         {
             "code": "pro",
             "name": "Pro",
-            "price_monthly": 0,
+            "price_monthly": 20,
             "currency": "USD",
             "policy": {
                 "limits": {
                     "max_cex_accounts": 56,
+                    "max_wallets": 15,
                     "max_evm_wallets": 15,
                     "min_refresh_interval_seconds": 0,
                 },
@@ -224,8 +248,14 @@ class APIClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=20,           # more concurrent connections
+                keepalive_timeout=30, # reuse TCP connections
+                enable_cleanup_closed=True,
+            )
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)  # Fast timeout for cached data
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=10, connect=3),  # Fast timeout
             )
         return self._session
 
@@ -260,13 +290,17 @@ class APIClient:
             return payload
 
         session = await self._get_session()
+        params = self._add_org_param()
+        params["include_metrics"] = "true"
         async with session.get(
             f"{settings.api_url}/api/v1/dashboard/summary",
             headers=self._build_headers(),
-            params=self._add_org_param(),
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=20, connect=5),
         ) as resp:
             resp.raise_for_status()
             return await resp.json()
+
 
     async def get_health(self) -> Dict[str, Any]:
         if self.no_backend_ui_mode:

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import and_, desc, func, select
@@ -237,6 +237,7 @@ class BalanceRepository:
         integration_id: int | None = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        limit: int | None = None,
     ) -> list[BalanceHistory]:
         query = select(BalanceHistory).where(
             BalanceHistory.organization_id == organization_id
@@ -252,8 +253,50 @@ class BalanceRepository:
             query = query.where(BalanceHistory.created_at <= end_date)
 
         query = query.order_by(BalanceHistory.created_at.asc(), BalanceHistory.id.asc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+    async def get_portfolio_snapshot_total_at(
+        self,
+        organization_id: int,
+        at: datetime,
+        *,
+        max_age: timedelta | None = None,
+    ) -> float:
+        """Return portfolio total at a point in time.
+
+        BalanceHistory stores one row per service/integration, not one row per
+        portfolio snapshot. This method builds a point-in-time portfolio by
+        taking the latest history row for each service/integration at or before
+        `at`, then summing those rows.
+        """
+        row_number = func.row_number().over(
+            partition_by=(BalanceHistory.service, BalanceHistory.integration_id),
+            order_by=(BalanceHistory.created_at.desc(), BalanceHistory.id.desc()),
+        ).label("rn")
+        predicates = [
+            BalanceHistory.organization_id == organization_id,
+            BalanceHistory.created_at <= at,
+        ]
+        if max_age is not None:
+            predicates.append(BalanceHistory.created_at >= at - max_age)
+
+        subquery = (
+            select(
+                BalanceHistory.total_usd.label("total_usd"),
+                row_number,
+            )
+            .where(and_(*predicates))
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(func.coalesce(func.sum(subquery.c.total_usd), 0.0)).where(
+                subquery.c.rn == 1
+            )
+        )
+        return float(result.scalar_one() or 0.0)
 
     async def get_history_count(
         self,

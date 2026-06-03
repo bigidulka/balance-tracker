@@ -22,6 +22,13 @@ class UiStateRepository:
             await self.save(state, ui_state)
         return ui_state
 
+    async def save_anchor(self, state: FSMContext, message_id: int) -> UiState:
+        """Always overwrite anchor — used on /start to point at the new message."""
+        ui_state = await self.load(state)
+        ui_state.anchor_message_id = message_id
+        await self.save(state, ui_state)
+        return ui_state
+
     async def set_current(
         self,
         state: FSMContext,
@@ -63,7 +70,9 @@ class UiStateRepository:
         await self.save(state, ui_state)
         return ui_state
 
-    async def set_waiting_input(self, state: FSMContext, waiting: dict | None) -> UiState:
+    async def set_waiting_input(
+        self, state: FSMContext, waiting: dict | None
+    ) -> UiState:
         ui_state = await self.load(state)
         ui_state.waiting_input = dict(waiting) if isinstance(waiting, dict) else None
         await self.save(state, ui_state)

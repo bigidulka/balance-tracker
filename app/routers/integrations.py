@@ -16,6 +16,11 @@ from app.schemas.integration import (
 from app.services.audit_log_service import AuditLogService
 from app.services.ccxt_manager import ccxt_manager
 from app.services.integration_service import IntegrationService
+from app.services.integrations.create_validation import (
+    CRYPTOBOT_PROVIDER_CODES,
+    validate_integration_create_payload,
+)
+from app.services.crypto_bot_app_client import crypto_bot_app_client
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.metrics_service import metrics_service
 
@@ -59,10 +64,17 @@ async def verify_integration_credentials(
     identity: IdentityContext = Depends(require_role("member")),
 ):
     exchange_code = payload.exchange_code.strip().lower()
+    if exchange_code in CRYPTOBOT_PROVIDER_CODES or exchange_code == "cryptobot":
+        try:
+            await crypto_bot_app_client.verify_token(str(payload.api_token or ""))
+            return IntegrationVerifyResponse(ok=True, error=None)
+        except Exception as exc:
+            return IntegrationVerifyResponse(ok=False, error=str(exc))
+
     ok, error = await ccxt_manager.verify_credentials(
         exchange_id=exchange_code,
-        api_key=payload.api_key,
-        api_secret=payload.api_secret,
+        api_key=str(payload.api_key or ""),
+        api_secret=str(payload.api_secret or ""),
         api_password=payload.api_password,
         api_uid=payload.api_uid,
     )
@@ -77,6 +89,7 @@ async def create_integration(
     db: AsyncSession = Depends(get_db),
     identity: IdentityContext = Depends(require_role("member")),
 ):
+    validate_integration_create_payload(payload)
     service = IntegrationService(db)
     integration = await service.create_integration(
         organization_id=identity.organization.id,
@@ -92,6 +105,7 @@ async def create_integration(
         api_secret=payload.api_secret,
         api_password=payload.api_password,
         api_uid=payload.api_uid,
+        api_token=payload.api_token,
     )
 
     request_id = f"integration-{integration.id}"
@@ -110,6 +124,7 @@ async def create_integration(
             "account_ref": payload.account_ref,
             "wallet_address": payload.wallet_address,
             "chain": payload.chain,
+            "has_api_token": bool(str(payload.api_token or "").strip()),
         },
     )
     metrics_service.inc("integration_create_total")

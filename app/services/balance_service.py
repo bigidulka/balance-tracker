@@ -18,7 +18,9 @@ from app.schemas.balance import (
     ServiceBalanceSchema,
 )
 from app.services.ccxt_manager import ccxt_manager
-from app.services.okx_wallet import okx_wallet_service
+from app.services.okx_wallet import okx_wallet_service, OKXWalletService
+from app.services.tron_ton_service import TronTonService, tron_ton_service
+from app.services.sui_service import SuiService, sui_service
 from app.services.metrics_service import metrics_service
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,43 @@ settings = get_settings()
 
 _balance_cache: dict[tuple[int, str, int | None], dict[str, object]] = {}
 _balance_cache_lock = Lock()
+_refresh_locks: dict[int, asyncio.Lock] = {}
+_refresh_locks_guard = Lock()
+_provider_circuit_state: dict[str, dict[str, float | int]] = {}
+_provider_circuit_guard = Lock()
+_PROVIDER_TIMEOUT_OVERRIDES_SECONDS: dict[str, float] = {
+    "gateio": 12.0,
+}
+_PROVIDER_CIRCUIT_OPEN_AFTER_FAILURES = 2
+_PROVIDER_CIRCUIT_OPEN_SECONDS = 180.0
+
+# All wallet service-name prefixes (used for DEX detection in routers/filters).
+WALLET_SERVICE_PREFIXES: tuple[str, ...] = (
+    "evm_",
+    "sol_",
+    "tron_",
+    "ton_",
+    "sui_",
+    "okx_wallet",
+)
+
+
+def wallet_service_name_for(wallet_address: str, provider: str) -> str:
+    """Return canonical service key for a DEX wallet, based on provider + address.
+
+    evm_wallet  (okx_wallet provider, EVM addr)  → evm_{addr}
+    sol_wallet  (okx_wallet provider, SOL addr)  → sol_{addr}
+    tron_wallet (tron_ton provider, TRON addr)   → tron_{addr}
+    ton_wallet  (tron_ton provider, TON addr)    → ton_{addr}
+    sui_wallet  (sui provider)                   → sui_{addr}
+    """
+    p = (provider or "").strip().lower()
+    if p == "tron_ton":
+        return TronTonService.service_name_for(wallet_address)
+    if p == "sui":
+        return SuiService.service_name_for(wallet_address)
+    # okx_wallet and anything else → OKXWalletService (evm_ / sol_)
+    return OKXWalletService.service_name_for(wallet_address)
 
 
 class BalanceService:
@@ -35,6 +74,14 @@ class BalanceService:
         self.balance_repo = BalanceRepository(session)
         self.status_repo = ServiceStatusRepository(session)
         self.entitlements = EntitlementsService(session)
+
+    def _refresh_lock(self) -> asyncio.Lock:
+        with _refresh_locks_guard:
+            lock = _refresh_locks.get(self.organization_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                _refresh_locks[self.organization_id] = lock
+            return lock
 
     async def load_balance_targets(self) -> tuple[list[dict[str, Any]], set[str]]:
         from app.services.integration_service import IntegrationService
@@ -65,28 +112,31 @@ class BalanceService:
 
             if kind == "dex":
                 wallet_address = str(integration.wallet_address or "").strip()
+                provider = str(integration.provider or "").strip().lower()
                 if wallet_address:
-                    service_name = okx_wallet_service.service_name_for(wallet_address)
+                    service_name = wallet_service_name_for(wallet_address, provider)
                     allowed_services.add(service_name)
-                    allowed_services.add(okx_wallet_service.legacy_service_name_for(wallet_address))
+                    # Keep legacy prefix in allowed set for old DB rows during rollover
+                    allowed_services.add(
+                        okx_wallet_service.legacy_service_name_for(wallet_address)
+                    )
                     targets.append(
                         {
                             "kind": "dex",
                             "integration_id": integration.id,
                             "service": service_name,
                             "source_id": wallet_address,
+                            "provider": provider,
                         }
                     )
 
         return targets, allowed_services
 
-    async def _load_cex_config_override(self, integration_id: int) -> dict[str, Any] | None:
-        from app.services.integration_service import IntegrationService
-
-        secrets = await IntegrationService(self.session).get_integration_secrets(
-            self.organization_id,
-            integration_id,
-        )
+    @staticmethod
+    def _build_cex_config_override_from_secrets(
+        secrets: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        secrets = secrets or {}
         api_key = str(secrets.get("api_key") or "").strip()
         api_secret = str(secrets.get("api_secret") or "").strip()
         if not api_key or not api_secret:
@@ -101,7 +151,20 @@ class BalanceService:
             config["uid"] = str(secrets["api_uid"])
         return config
 
-    def _get_cached_balance(self, service: str, integration_id: int | None = None) -> Optional[ServiceBalanceSchema]:
+    async def _load_cex_config_override(
+        self, integration_id: int
+    ) -> dict[str, Any] | None:
+        from app.services.integration_service import IntegrationService
+
+        secrets = await IntegrationService(self.session).get_integration_secrets(
+            self.organization_id,
+            integration_id,
+        )
+        return self._build_cex_config_override_from_secrets(secrets)
+
+    def _get_cached_balance(
+        self, service: str, integration_id: int | None = None
+    ) -> Optional[ServiceBalanceSchema]:
         state = self._get_cached_balance_state(service, integration_id=integration_id)
         return state["balance"] if state else None
 
@@ -188,12 +251,18 @@ class BalanceService:
             )
         return None
 
-    def _balance_from_record(self, record: Any, *, service: str) -> ServiceBalanceSchema:
-        assets = [AssetSchema(**asset) for asset in (getattr(record, "assets", None) or [])]
+    def _balance_from_record(
+        self, record: Any, *, service: str
+    ) -> ServiceBalanceSchema:
+        assets = [
+            AssetSchema(**asset) for asset in (getattr(record, "assets", None) or [])
+        ]
         accounts = [
             AccountBalanceSchema(
                 account_type=str(account.get("account_type") or "spot"),
-                assets=[AssetSchema(**asset) for asset in (account.get("assets") or [])],
+                assets=[
+                    AssetSchema(**asset) for asset in (account.get("assets") or [])
+                ],
                 total_usd=float(account.get("total_usd") or 0.0),
             )
             for account in (getattr(record, "accounts", None) or [])
@@ -210,6 +279,101 @@ class BalanceService:
 
     def _is_degraded_balance(self, balance: ServiceBalanceSchema) -> bool:
         return not balance.actual
+
+    def _provider_timeout_seconds(self, service: str) -> float | None:
+        raw = _PROVIDER_TIMEOUT_OVERRIDES_SECONDS.get(service)
+        if raw is not None:
+            return max(0.1, float(raw))
+        return None
+
+    def _provider_circuit_is_open(self, service: str) -> bool:
+        with _provider_circuit_guard:
+            state = _provider_circuit_state.get(service)
+            if not state:
+                return False
+            opened_until = float(state.get("opened_until", 0.0) or 0.0)
+            if opened_until <= time.time():
+                _provider_circuit_state.pop(service, None)
+                return False
+            return True
+
+    def _provider_circuit_record_success(self, service: str) -> None:
+        with _provider_circuit_guard:
+            _provider_circuit_state.pop(service, None)
+
+    def _provider_circuit_record_failure(self, service: str) -> None:
+        with _provider_circuit_guard:
+            state = _provider_circuit_state.setdefault(
+                service, {"failures": 0, "opened_until": 0.0}
+            )
+            failures = int(state.get("failures", 0) or 0) + 1
+            state["failures"] = failures
+            if failures >= _PROVIDER_CIRCUIT_OPEN_AFTER_FAILURES:
+                state["opened_until"] = time.time() + _PROVIDER_CIRCUIT_OPEN_SECONDS
+
+    async def _fetch_target_balance(
+        self,
+        target: dict[str, Any],
+        *,
+        config_override: dict[str, Any] | None = None,
+    ) -> ServiceBalanceSchema | None:
+        service = str(target["service"])
+        kind = str(target["kind"])
+        started_at = time.perf_counter()
+
+        if self._provider_circuit_is_open(service):
+            logger.warning(
+                "balance_fetch_target service=%s kind=%s duration_ms=0 ok=0 skipped=circuit_open",
+                service,
+                kind,
+            )
+            raise RuntimeError(f"Provider circuit open: {service}")
+
+        try:
+            if kind == "cex":
+                runner = ccxt_manager.fetch_balance(
+                    str(target["source_id"]),
+                    config_override=config_override,
+                )
+            else:
+                provider = str(target.get("provider") or "").strip().lower()
+                source_id = str(target["source_id"])
+                if provider == "tron_ton":
+                    runner = tron_ton_service.fetch_wallet_balance(source_id)
+                elif provider == "sui":
+                    runner = sui_service.fetch_wallet_balance(source_id)
+                else:
+                    runner = okx_wallet_service.fetch_wallet_balance(source_id)
+
+            timeout_seconds = self._provider_timeout_seconds(service)
+            if timeout_seconds is not None:
+                result = await asyncio.wait_for(runner, timeout=timeout_seconds)
+            else:
+                result = await runner
+
+            self._provider_circuit_record_success(service)
+            metrics_service.observe_duration(
+                f"balance_fetch_target_{kind}_seconds", time.perf_counter() - started_at
+            )
+            logger.info(
+                "balance_fetch_target service=%s kind=%s duration_ms=%d ok=1",
+                service,
+                kind,
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return result
+        except Exception:
+            self._provider_circuit_record_failure(service)
+            metrics_service.observe_duration(
+                f"balance_fetch_target_{kind}_seconds", time.perf_counter() - started_at
+            )
+            logger.warning(
+                "balance_fetch_target service=%s kind=%s duration_ms=%d ok=0",
+                service,
+                kind,
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            raise
 
     async def fetch_and_save_balance(
         self,
@@ -249,7 +413,9 @@ class BalanceService:
             organization_id=self.organization_id,
         )
 
-        fallback = await self._get_fallback_balance(service, integration_id=integration_id)
+        fallback = await self._get_fallback_balance(
+            service, integration_id=integration_id
+        )
         if fallback:
             await self.balance_repo.mark_as_stale(
                 service,
@@ -261,6 +427,7 @@ class BalanceService:
         return None
 
     async def get_all_balances(self, force_refresh: bool = False) -> PortfolioResponse:
+        request_started_at = time.perf_counter()
         targets, allowed_services = await self.load_balance_targets()
 
         if not allowed_services:
@@ -281,7 +448,9 @@ class BalanceService:
                 service = str(target["service"])
                 integration_id = int(target["integration_id"])
                 cache_key = f"{service}:{integration_id}"
-                cached_state = self._get_cached_balance_state(service, integration_id=integration_id)
+                cached_state = self._get_cached_balance_state(
+                    service, integration_id=integration_id
+                )
                 if not cached_state:
                     metrics_service.inc("ccxt_cache_miss_total")
                     fetch_targets.append(target)
@@ -315,20 +484,37 @@ class BalanceService:
             async with semaphore:
                 return await coro
 
+        cex_integration_ids = [
+            int(target["integration_id"])
+            for target in targets
+            if target["kind"] == "cex"
+        ]
+        cex_secret_map: dict[int, dict[str, str]] = {}
+        if cex_integration_ids:
+            from app.services.integration_service import IntegrationService
+
+            cex_secret_map = await IntegrationService(self.session).get_integration_secrets_bulk(
+                self.organization_id,
+                cex_integration_ids,
+            )
+
         for target in targets:
             if target["kind"] == "cex":
-                config_override = await self._load_cex_config_override(int(target["integration_id"]))
+                integration_id = int(target["integration_id"])
+                config_override = self._build_cex_config_override_from_secrets(
+                    cex_secret_map.get(integration_id)
+                )
                 task = asyncio.create_task(
                     _run_with_limit(
-                        ccxt_manager.fetch_balance(
-                            str(target["source_id"]),
+                        self._fetch_target_balance(
+                            target,
                             config_override=config_override,
                         )
                     )
                 )
             else:
                 task = asyncio.create_task(
-                    _run_with_limit(okx_wallet_service.fetch_wallet_balance(str(target["source_id"])))
+                    _run_with_limit(self._fetch_target_balance(target))
                 )
             tasks.append(task)
             task_map[id(task)] = target
@@ -371,9 +557,22 @@ class BalanceService:
                     all_balances_by_service[cache_key] = saved
 
         all_balances = list(all_balances_by_service.values())
-        all_balances = [balance for balance in all_balances if balance.service in allowed_services]
+        all_balances = [
+            balance for balance in all_balances if balance.service in allowed_services
+        ]
         total_usd = sum(b.total_usd for b in all_balances)
 
+        metrics_service.observe_duration(
+            "balance_get_all_seconds", time.perf_counter() - request_started_at
+        )
+        logger.info(
+            "balance_get_all organization_id=%s targets=%s services=%s total_ms=%d force_refresh=%s",
+            self.organization_id,
+            len(targets),
+            len(all_balances),
+            int((time.perf_counter() - request_started_at) * 1000),
+            int(bool(force_refresh)),
+        )
         return PortfolioResponse(
             total_usd=total_usd,
             services=all_balances,
@@ -381,41 +580,97 @@ class BalanceService:
         )
 
     async def refresh_all(self) -> tuple[list[str], list[str]]:
-        updated = []
-        failed = []
+        request_started_at = time.perf_counter()
+        updated: list[str] = []
+        failed: list[str] = []
 
-        await self.entitlements.ensure_refresh_interval_for_organization(self.organization_id)
-
-        targets, _ = await self.load_balance_targets()
-
-        for target in targets:
-            service = str(target["service"])
-            integration_id = int(target["integration_id"])
-            try:
-                if target["kind"] == "cex":
-                    config_override = await self._load_cex_config_override(integration_id)
-                    result = await ccxt_manager.fetch_balance(
-                        str(target["source_id"]),
-                        config_override=config_override,
-                    )
-                else:
-                    result = await okx_wallet_service.fetch_wallet_balance(str(target["source_id"]))
-            except Exception as exc:
-                await self.handle_fetch_error(service, exc, integration_id=integration_id)
-                failed.append(service)
-                continue
-
-            if result is not None and self._is_degraded_balance(result):
-                await self.handle_fetch_error(
-                    service,
-                    RuntimeError("Degraded balance payload"),
-                    integration_id=integration_id,
+        refresh_lock = self._refresh_lock()
+        wait_started = time.perf_counter()
+        async with refresh_lock:
+            lock_wait = time.perf_counter() - wait_started
+            if lock_wait > 0.001:
+                metrics_service.observe_duration("balance_refresh_lock_wait_seconds", lock_wait)
+                logger.info(
+                    "balance_refresh_lock_wait organization_id=%s wait_ms=%d",
+                    self.organization_id,
+                    int(lock_wait * 1000),
                 )
-                failed.append(service)
-                continue
 
-            await self.fetch_and_save_balance(service, result, integration_id=integration_id)
-            updated.append(service)
+            await self.entitlements.ensure_refresh_interval_for_organization(
+                self.organization_id
+            )
+
+            targets, _ = await self.load_balance_targets()
+            if targets:
+                parallelism = max(1, settings.exchange_parallelism)
+                semaphore = asyncio.Semaphore(parallelism)
+
+                async def _run_with_limit(coro):
+                    async with semaphore:
+                        return await coro
+
+                cex_integration_ids = [
+                    int(target["integration_id"])
+                    for target in targets
+                    if target["kind"] == "cex"
+                ]
+                cex_secret_map: dict[int, dict[str, str]] = {}
+                if cex_integration_ids:
+                    from app.services.integration_service import IntegrationService
+
+                    cex_secret_map = await IntegrationService(self.session).get_integration_secrets_bulk(
+                        self.organization_id,
+                        cex_integration_ids,
+                    )
+
+                tasks = []
+                task_map: dict[int, dict[str, Any]] = {}
+                for target in targets:
+                    integration_id = int(target["integration_id"])
+                    if target["kind"] == "cex":
+                        config_override = self._build_cex_config_override_from_secrets(
+                            cex_secret_map.get(integration_id)
+                        )
+                        task = asyncio.create_task(
+                            _run_with_limit(
+                                self._fetch_target_balance(
+                                    target,
+                                    config_override=config_override,
+                                )
+                            )
+                        )
+                    else:
+                        task = asyncio.create_task(
+                            _run_with_limit(self._fetch_target_balance(target))
+                        )
+                    tasks.append(task)
+                    task_map[id(task)] = target
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for task, result in zip(tasks, results):
+                    target = task_map[id(task)]
+                    service = str(target["service"])
+                    integration_id = int(target["integration_id"])
+                    if isinstance(result, BaseException):
+                        await self.handle_fetch_error(
+                            service, result, integration_id=integration_id
+                        )
+                        failed.append(service)
+                        continue
+
+                    if result is not None and self._is_degraded_balance(result):
+                        await self.handle_fetch_error(
+                            service,
+                            RuntimeError("Degraded balance payload"),
+                            integration_id=integration_id,
+                        )
+                        failed.append(service)
+                        continue
+
+                    await self.fetch_and_save_balance(
+                        service, result, integration_id=integration_id
+                    )
+                    updated.append(service)
 
         if failed:
             job_status = "partial" if updated else "failed"
@@ -432,5 +687,17 @@ class BalanceService:
         )
         self.session.add(job)
         await self.session.commit()
+
+        metrics_service.observe_duration(
+            "balance_refresh_all_seconds", time.perf_counter() - request_started_at
+        )
+        logger.info(
+            "balance_refresh_all organization_id=%s targets=%s updated=%s failed=%s total_ms=%d",
+            self.organization_id,
+            len(targets),
+            len(updated),
+            len(failed),
+            int((time.perf_counter() - request_started_at) * 1000),
+        )
 
         return updated, failed

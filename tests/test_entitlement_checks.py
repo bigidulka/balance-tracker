@@ -359,6 +359,53 @@ class EffectiveEntitlementsDatetimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(payload["capabilities"]["refresh"] in {True, False})
             self.assertIsInstance(payload["policy"]["state"]["integrations"], dict)
 
+    async def test_effective_entitlements_keep_manual_and_background_refresh_separate(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Org Pro", slug="org-pro")
+            session.add(org)
+            await session.flush()
+
+            plan = Plan(
+                code="pro",
+                name="Pro",
+                max_integrations=71,
+                min_refresh_interval_seconds=60,
+                policy_json={
+                    "version": 1,
+                    "features": {"allow_dex": True},
+                    "limits": {
+                        "max_integrations": 71,
+                        "max_accounts_per_exchange": 0,
+                        "max_cex_accounts": 56,
+                        "max_evm_wallets": 15,
+                        "min_refresh_interval_seconds": 0,
+                    },
+                    "background": {
+                        "enabled": True,
+                        "refresh_interval_seconds": 0,
+                    },
+                    "throttling": {
+                        "min_refresh_interval_seconds": 0,
+                        "background_refresh_interval_seconds": 60,
+                    },
+                },
+                is_active=True,
+            )
+            session.add(plan)
+            await session.flush()
+            session.add(Subscription(organization_id=org.id, plan_id=plan.id, status="active"))
+            await session.commit()
+
+            payload = await EntitlementsService(session).get_effective_entitlements(org.id)
+
+            self.assertEqual(payload["background"]["refresh_interval_seconds"], 0)
+            self.assertEqual(payload["throttling"]["min_refresh_interval_seconds"], 0)
+            self.assertEqual(payload["throttling"]["background_refresh_interval_seconds"], 60)
+            self.assertEqual(
+                payload["policy"]["throttling"]["background_refresh_interval_seconds"],
+                60,
+            )
+
 
 class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -393,7 +440,7 @@ class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
                 integration_id=integration.id,
                 job_type="refresh",
                 status="queued",
-                payload={},
+                payload={"enforce_refresh_interval_at_run": True},
                 result={},
             )
             session.add(job)
@@ -420,6 +467,87 @@ class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated_job.result["code"], "refresh_rate_limited")
             self.assertEqual(updated_job.result["retry_after_seconds"], 42)
             self.assertEqual(updated_job.result["min_refresh_interval_seconds"], 600)
+
+    async def test_queued_org_refresh_jobs_do_not_rate_limit_each_other(self):
+        from app.services.integrations.provider import ProviderRefreshResult
+
+        class FakeProvider:
+            provider_name = "fake"
+
+            async def refresh(self, organization_id, integration, payload=None):
+                return ProviderRefreshResult(status="not_implemented", message="ok")
+
+        async with self.session_maker() as session:
+            org = Organization(name="Org Batch", slug="org-batch")
+            session.add(org)
+            await session.flush()
+
+            plan = Plan(
+                code="free",
+                name="Free",
+                max_integrations=6,
+                min_refresh_interval_seconds=600,
+                policy_json={
+                    "version": 1,
+                    "features": {"allow_dex": True},
+                    "limits": {
+                        "max_integrations": 6,
+                        "max_accounts_per_exchange": 0,
+                        "max_cex_accounts": 5,
+                        "max_evm_wallets": 1,
+                        "min_refresh_interval_seconds": 600,
+                    },
+                    "background": {
+                        "enabled": True,
+                        "refresh_interval_seconds": 600,
+                    },
+                    "throttling": {
+                        "min_refresh_interval_seconds": 600,
+                        "background_refresh_interval_seconds": 600,
+                    },
+                },
+                is_active=True,
+            )
+            session.add(plan)
+            await session.flush()
+            session.add(Subscription(organization_id=org.id, plan_id=plan.id, status="active"))
+            session.add_all(
+                [
+                    Integration(
+                        organization_id=org.id,
+                        provider="fake",
+                        name="Fake A",
+                        kind="cex",
+                        exchange_code="fake",
+                        account_ref="a",
+                        is_active=True,
+                    ),
+                    Integration(
+                        organization_id=org.id,
+                        provider="fake",
+                        name="Fake B",
+                        kind="cex",
+                        exchange_code="fake",
+                        account_ref="b",
+                        is_active=True,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            service = SyncJobService(session)
+            jobs = await service.queue_refresh_for_organization(org.id)
+            self.assertEqual(len(jobs), 2)
+
+            with patch(
+                "app.services.sync_job_service.get_provider",
+                return_value=FakeProvider(),
+            ):
+                first = await service.run_next_job()
+                second = await service.run_next_job()
+
+            self.assertEqual(first.status, "completed")
+            self.assertEqual(second.status, "completed")
 
 
 class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):

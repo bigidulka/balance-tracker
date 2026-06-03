@@ -9,6 +9,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.http import request_proxy_kwargs, session_kwargs
 from app.models.balance import BillingEvent, PaymentInvoice
 from app.services.billing_service import BillingService
 from app.services.ledger_service import LedgerService
@@ -32,7 +33,7 @@ class CryptoBotService:
     async def _get_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None or self._http_session.closed:
             self._http_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=20)
+                **session_kwargs(aiohttp.ClientTimeout(total=20))
             )
         return self._http_session
 
@@ -51,6 +52,7 @@ class CryptoBotService:
             f"{settings.crypto_bot_api_base_url.rstrip('/')}/{method_name}",
             headers=headers,
             json=payload,
+            **request_proxy_kwargs(),
         ) as response:
             data = await response.json(content_type=None)
             if response.status >= 400:

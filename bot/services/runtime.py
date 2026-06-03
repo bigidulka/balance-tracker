@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import json
 import logging
@@ -144,6 +145,24 @@ def get_current_backend_auth_session() -> dict[str, Any] | None:
     return dict(payload) if isinstance(payload, dict) else None
 
 
+def _jwt_expired(token: str, *, skew_seconds: int = 60) -> bool:
+    raw = str(token or "").strip()
+    if not raw:
+        return True
+    try:
+        parts = raw.split(".", 2)
+        if len(parts) != 3:
+            return True
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8"))
+        exp = int(payload.get("exp") or 0)
+    except Exception:
+        return True
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    return exp <= now_ts + max(int(skew_seconds), 0)
+
+
 def _sanitize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     payload = dict(_DEFAULT_USER_SETTINGS)
     if not isinstance(raw, dict):
@@ -260,8 +279,14 @@ async def ensure_backend_auth_session(
         if normalized_full_name and str(existing.get("full_name") or "").strip() != normalized_full_name:
             needs_profile_refresh = True
     if existing is not None and not needs_profile_refresh:
-        set_current_backend_auth_session(existing)
-        return existing
+        token = str(existing.get("access_token") or "").strip()
+        if not _jwt_expired(token):
+            set_current_backend_auth_session(existing)
+            return existing
+        logger.info(
+            "Backend auth session expired for telegram_user_id=%s, refreshing",
+            telegram_user_id,
+        )
 
     if settings.no_backend_ui_mode:
         payload = BackendAuthSession(

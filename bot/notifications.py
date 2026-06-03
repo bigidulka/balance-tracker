@@ -7,6 +7,7 @@ from aiogram import Bot
 
 from bot.api_client import api_client
 from bot.config import settings
+from bot.naming import service_label as _svc_label
 from bot.services.runtime import (
     ensure_backend_auth_session,
     get_notification_recipients,
@@ -60,7 +61,7 @@ def _serialize_change_history() -> dict[str, dict[str, list[list[object]]]]:
 
 
 def _deserialize_change_history(
-    payload: dict[str, dict[str, list[list[object]]]]
+    payload: dict[str, dict[str, list[list[object]]]],
 ) -> Dict[str, Dict[str, List[Tuple[datetime, float, float]]]]:
     parsed: Dict[str, Dict[str, List[Tuple[datetime, float, float]]]] = {}
     for service, coins in payload.items():
@@ -88,7 +89,9 @@ def _deserialize_change_history(
     return parsed
 
 
-def _is_oscillation(service: str, coin: str, old_amount: float, new_amount: float) -> bool:
+def _is_oscillation(
+    service: str, coin: str, old_amount: float, new_amount: float
+) -> bool:
     now = datetime.now()
     if service not in _change_history:
         _change_history[service] = {}
@@ -155,8 +158,10 @@ def _detect_changes(
     return changes
 
 
-def _format_notification(service: str, changes: List[Tuple[str, str, float, float]]) -> str:
-    lines = [f"💰 <b>Balance changed on {service}</b>", ""]
+def _format_notification(
+    service: str, changes: List[Tuple[str, str, float, float]]
+) -> str:
+    lines = [f"💰 <b>Balance changed on {_svc_label(service)}</b>", ""]
 
     inflows = [(c, o, n) for c, d, o, n in changes if d == "inflow"]
     outflows = [(c, o, n) for c, d, o, n in changes if d == "outflow"]
@@ -216,10 +221,14 @@ async def check_and_notify(bot: Bot) -> None:
             tg_token = set_current_telegram_user_id(user_id)
             backend_token = None
             try:
-                backend_auth = await ensure_backend_auth_session(telegram_user_id=user_id)
+                backend_auth = await ensure_backend_auth_session(
+                    telegram_user_id=user_id
+                )
                 backend_token = set_current_backend_auth_session(backend_auth)
                 _previous_balances = await load_notification_balances(user_id)
-                _change_history = _deserialize_change_history(await load_notification_changes(user_id))
+                _change_history = _deserialize_change_history(
+                    await load_notification_changes(user_id)
+                )
 
                 data = await api_client.get_balances(cached=True)
                 services = data.get("services", [])
@@ -252,7 +261,9 @@ async def check_and_notify(bot: Bot) -> None:
                         try:
                             await bot.send_message(user_id, message, parse_mode="HTML")
                         except Exception as exc:
-                            logger.error("Failed to send notification to %s: %s", user_id, exc)
+                            logger.error(
+                                "Failed to send notification to %s: %s", user_id, exc
+                            )
 
                     _previous_balances[service_name] = current_assets
 
@@ -320,7 +331,7 @@ def _format_transaction_notification(tx: Dict[str, Any]) -> str:
 
     amount_str = _format_amount(amount, currency)
     lines = [
-        f"{icon} <b>{title}</b> - {service.upper()}",
+        f"{icon} <b>{title}</b> - {_svc_label(service)}",
         "",
         f"💰 {direction}: <b>{amount_str} {currency}</b>",
         f"🌐 Network: {network}",
@@ -362,14 +373,18 @@ async def check_and_notify_transactions(bot: Bot) -> None:
             tg_token = set_current_telegram_user_id(user_id)
             backend_token = None
             try:
-                backend_auth = await ensure_backend_auth_session(telegram_user_id=user_id)
+                backend_auth = await ensure_backend_auth_session(
+                    telegram_user_id=user_id
+                )
                 backend_token = set_current_backend_auth_session(backend_auth)
                 _processed_transactions = await load_processed_transactions(user_id)
 
                 try:
                     await api_client.refresh_transactions(since_hours=24)
                 except Exception as exc:
-                    logger.warning("Failed to refresh transactions for %s: %s", user_id, exc)
+                    logger.warning(
+                        "Failed to refresh transactions for %s: %s", user_id, exc
+                    )
 
                 data = await api_client.get_transactions(status="ok", limit=50)
                 transactions = data.get("transactions", [])
@@ -399,7 +414,9 @@ async def check_and_notify_transactions(bot: Bot) -> None:
                         )
 
                     _processed_transactions[tx_key] = service
-                    logger.info("Sent notification for user %s transaction %s", user_id, tx_key)
+                    logger.info(
+                        "Sent notification for user %s transaction %s", user_id, tx_key
+                    )
 
                 if len(_processed_transactions) > 1000:
                     items = list(_processed_transactions.items())
