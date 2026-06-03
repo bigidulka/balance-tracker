@@ -3,6 +3,10 @@
 This project should run API, worker, and scheduler on PostgreSQL for 100+ concurrent users.
 SQLite remains only as the migration source and local fallback.
 
+`DATABASE_USE_SQLITE` may still exist in legacy `.env` files. Compose uses
+`APP_DATABASE_USE_SQLITE` for the runtime switch so old `.env` values do not
+accidentally keep services on SQLite.
+
 ## Safe Production Sequence
 
 1. Stop write workers before copying:

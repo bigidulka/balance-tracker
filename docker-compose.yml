@@ -55,7 +55,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - DATABASE_USE_SQLITE=${APP_DATABASE_USE_SQLITE:-false}
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
@@ -93,7 +93,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - DATABASE_USE_SQLITE=${APP_DATABASE_USE_SQLITE:-false}
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
@@ -127,7 +127,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - DATABASE_USE_SQLITE=${APP_DATABASE_USE_SQLITE:-false}
       - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
