@@ -14,6 +14,9 @@ htmlcov/
 AGENTS.md
 venv/
 .venv/
+.venv*/
+tmp/
+.tmp/
 
 .env
 .env.local
@@ -24,3 +27,8 @@ venv/
 api_keys.json
 data/*.db
 data/*.sqlite*
+loadtests/out/
+debank-sdk/node_modules/
+debank-sdk/.next/
+debank-sdk/dist/
+debank-sdk/backend/node_modules/
