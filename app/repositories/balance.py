@@ -348,6 +348,45 @@ class BalanceRepository:
             total += float(result.scalar_one_or_none() or 0.0)
         return total
 
+    async def get_portfolio_snapshot_total_near(
+        self,
+        organization_id: int,
+        at: datetime,
+        *,
+        lookback: timedelta,
+    ) -> float:
+        """Return total portfolio snapshot near a point in time.
+
+        This reconstructs a total portfolio snapshot from a short history
+        window by taking the latest row per service/integration before `at`.
+        It reflects the portfolio that existed at that time, not today's active
+        integration list, and avoids scanning the full history table.
+        """
+        row_number = func.row_number().over(
+            partition_by=(BalanceHistory.service, BalanceHistory.integration_id),
+            order_by=(BalanceHistory.created_at.desc(), BalanceHistory.id.desc()),
+        ).label("rn")
+        subquery = (
+            select(
+                BalanceHistory.total_usd.label("total_usd"),
+                row_number,
+            )
+            .where(
+                and_(
+                    BalanceHistory.organization_id == organization_id,
+                    BalanceHistory.created_at <= at,
+                    BalanceHistory.created_at >= at - lookback,
+                )
+            )
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(func.coalesce(func.sum(subquery.c.total_usd), 0.0)).where(
+                subquery.c.rn == 1
+            )
+        )
+        return float(result.scalar_one() or 0.0)
+
     async def get_history_count(
         self,
         organization_id: int = DEFAULT_ORGANIZATION_ID,
