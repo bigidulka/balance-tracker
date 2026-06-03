@@ -476,6 +476,18 @@ class TestSettingsCurrencyIntegration(unittest.TestCase):
         has_currency = any("RUB" in t or "валют" in t.lower() for t in texts)
         self.assertTrue(has_currency, f"Currency button not found in: {texts}")
 
+    def test_runtime_settings_preserve_display_currency(self):
+        from bot.services.runtime import _sanitize_settings
+
+        payload = _sanitize_settings({"display_currency": "rub"})
+        self.assertEqual(payload["display_currency"], "RUB")
+
+    def test_runtime_settings_reject_unknown_display_currency(self):
+        from bot.services.runtime import _sanitize_settings
+
+        payload = _sanitize_settings({"display_currency": "BAD"})
+        self.assertEqual(payload["display_currency"], "USD")
+
 
 if __name__ == "__main__":
     unittest.main()
