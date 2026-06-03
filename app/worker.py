@@ -8,6 +8,7 @@ from app.services.ccxt_manager import ccxt_manager
 from app.services.entitlements_service import EntitlementsService
 from app.services.okx_wallet import okx_wallet_service
 from app.services.refresh_orchestrator import RefreshOrchestrator
+from app.services.sync_job_service import SyncJobService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +73,11 @@ async def main() -> None:
 
     await init_db()
     await _ensure_defaults()
+
+    async with async_session_maker() as db:
+        recovered = await SyncJobService(db).recover_stale_running_jobs()
+        if recovered:
+            logger.warning("Recovered stale running sync jobs count=%s", recovered)
 
     worker_count = max(1, settings.job_parallelism)
     logger.info("Starting %s sync worker loop(s)", worker_count)
