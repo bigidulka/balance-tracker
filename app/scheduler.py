@@ -12,6 +12,7 @@ from app.services.ccxt_manager import ccxt_manager
 from app.services.entitlements_service import EntitlementsService
 from app.services.okx_wallet import okx_wallet_service
 from app.services.refresh_orchestrator import RefreshOrchestrator
+from app.services.sync_job_service import SyncJobService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +38,9 @@ async def _ensure_defaults() -> None:
 
 
 async def _has_active_refresh_job(db, organization_id: int) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=max(60, settings.sync_job_running_timeout_seconds)
+    )
     result = await db.execute(
         select(func.count(SyncJob.id)).where(
             SyncJob.organization_id == organization_id,
@@ -68,6 +71,10 @@ async def _schedule_once() -> int:
     now = datetime.now(timezone.utc)
     scheduled = 0
     async with async_session_maker() as db:
+        recovered = await SyncJobService(db).recover_stale_running_jobs()
+        if recovered:
+            logger.warning("Recovered stale running sync jobs count=%s", recovered)
+
         result = await db.execute(
             select(Organization).where(Organization.is_active == True).order_by(Organization.id)
         )

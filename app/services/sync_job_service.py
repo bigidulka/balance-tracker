@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.services.metrics_service import metrics_service
@@ -26,6 +26,38 @@ class SyncJobService:
         self.entitlements = EntitlementsService(session)
         self.balance_repo = BalanceRepository(session)
         self.status_repo = ServiceStatusRepository(session)
+
+    async def recover_stale_running_jobs(
+        self,
+        *,
+        timeout_seconds: int | None = None,
+        organization_id: int | None = None,
+    ) -> int:
+        timeout = max(60, int(timeout_seconds or settings.sync_job_running_timeout_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout)
+        predicates = [
+            SyncJob.status == "running",
+            SyncJob.started_at.is_not(None),
+            SyncJob.started_at < cutoff,
+        ]
+        if organization_id is not None:
+            predicates.append(SyncJob.organization_id == organization_id)
+
+        result = await self.session.execute(
+            update(SyncJob)
+            .where(*predicates)
+            .values(
+                status="failed",
+                finished_at=datetime.now(timezone.utc),
+                error_message="Recovered stale running job after worker restart",
+                result={"status": "failed", "code": "stale_running_job_recovered"},
+            )
+        )
+        await self.session.commit()
+        recovered = int(result.rowcount or 0)
+        if recovered:
+            metrics_service.inc("sync_jobs_stale_recovered_total", recovered)
+        return recovered
 
     async def _persist_balance_from_refresh_result(
         self,
