@@ -87,6 +87,7 @@ class BackendAuthSession:
 
 _DEFAULT_USER_SETTINGS: dict[str, Any] = {
     "language": DEFAULT_LOCALE,
+    "display_currency": "USD",
     "hide_small": False,
     "tx_type": "all",
     "tx_status": "all",
@@ -171,6 +172,12 @@ def _sanitize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         if key in raw:
             payload[key] = raw[key]
     payload["language"] = normalize_locale(payload.get("language"))
+    from bot.services.fx_rates import currency_codes
+
+    display_currency = str(payload.get("display_currency") or "USD").strip().upper()
+    payload["display_currency"] = (
+        display_currency if display_currency in set(currency_codes()) else "USD"
+    )
     payload["hide_small"] = bool(payload.get("hide_small"))
     if str(payload.get("tx_type")) not in {"all", "deposit", "withdrawal"}:
         payload["tx_type"] = "all"
