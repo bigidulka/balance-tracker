@@ -105,7 +105,7 @@ class Balance(Base):
         nullable=True,
         index=True,
     )
-    service = Column(String(50), nullable=False, index=True)
+    service = Column(String(128), nullable=False, index=True)
     assets = Column(JSON, nullable=False, default=list)  # Deprecated: for compatibility
     accounts = Column(
         JSON, nullable=False, default=list
@@ -133,7 +133,7 @@ class BalanceHistory(Base):
         nullable=True,
         index=True,
     )
-    service = Column(String(50), nullable=False, index=True)
+    service = Column(String(128), nullable=False, index=True)
     assets = Column(JSON, nullable=False, default=list)  # Deprecated
     accounts = Column(
         JSON, nullable=False, default=list
@@ -164,7 +164,7 @@ class ServiceStatus(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     organization_id = Column(Integer, nullable=False, default=DEFAULT_ORGANIZATION_ID, index=True)
-    service = Column(String(50), nullable=False, index=True)
+    service = Column(String(128), nullable=False, index=True)
     is_healthy = Column(Boolean, nullable=False, default=True)
     last_error = Column(String(500), nullable=True)
     last_check = Column(
@@ -197,7 +197,7 @@ class Transaction(Base):
     tx_id = Column(String(255), nullable=False, index=True)
 
     # Сервис (биржа)
-    service = Column(String(50), nullable=False, index=True)
+    service = Column(String(128), nullable=False, index=True)
 
     # Тип транзакции: deposit или withdrawal
     tx_type = Column(String(20), nullable=False, index=True)
