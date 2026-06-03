@@ -302,7 +302,7 @@ class BalanceRepository:
         self,
         organization_id: int,
         at: datetime,
-        keys: Sequence[tuple[str, int | str]],
+        keys: Sequence[tuple[str, object]],
         *,
         max_age: timedelta | None = None,
     ) -> float:
@@ -327,7 +327,16 @@ class BalanceRepository:
             if max_age is not None:
                 predicates.append(BalanceHistory.created_at >= at - max_age)
 
-            if key_type == "integration":
+            if key_type == "service_integration":
+                if not isinstance(raw_value, tuple) or len(raw_value) != 2:
+                    continue
+                service, integration_id = raw_value
+                predicates.append(BalanceHistory.service == str(service))
+                if integration_id is None:
+                    predicates.append(BalanceHistory.integration_id.is_(None))
+                else:
+                    predicates.append(BalanceHistory.integration_id == int(integration_id))
+            elif key_type == "integration":
                 predicates.append(BalanceHistory.integration_id == int(raw_value))
             elif key_type == "service":
                 predicates.extend(
