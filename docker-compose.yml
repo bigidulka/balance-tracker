@@ -47,6 +47,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: balance-tracker-api
+    command: ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${API_UVICORN_WORKERS:-4}"]
     mem_limit: 1024m
     ports:
       - "127.0.0.1:8001:8000"
@@ -61,8 +62,9 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
       - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
-      - DB_POOL_SIZE=${API_DB_POOL_SIZE:-30}
-      - DB_MAX_OVERFLOW=${API_DB_MAX_OVERFLOW:-30}
+      - API_UVICORN_WORKERS=${API_UVICORN_WORKERS:-4}
+      - DB_POOL_SIZE=${API_DB_POOL_SIZE:-8}
+      - DB_MAX_OVERFLOW=${API_DB_MAX_OVERFLOW:-8}
       - DB_POOL_TIMEOUT=${API_DB_POOL_TIMEOUT:-10}
       - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
       - BOT_PROXY=${BOT_PROXY:-}
