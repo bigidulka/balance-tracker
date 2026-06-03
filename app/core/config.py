@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     refresh_scheduler_poll_interval_seconds: float = Field(default=30.0)
     refresh_scheduler_min_interval_seconds: int = Field(default=60)
     refresh_scheduler_batch_size: int = Field(default=20)
+    sync_job_running_timeout_seconds: int = Field(default=900)
 
     # Legacy aliases kept for backward compatibility during rollout.
     enable_legacy_background_refresh_loop: Optional[bool] = Field(default=None)
