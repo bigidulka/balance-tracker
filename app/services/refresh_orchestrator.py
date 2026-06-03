@@ -7,6 +7,11 @@ from app.services.balance_service import BalanceService
 from app.services.sync_job_service import SyncJobService
 
 
+class RefreshQueuedResult:
+    def __init__(self, jobs: list[SyncJob]):
+        self.jobs = jobs
+
+
 class RefreshOrchestrator:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -14,6 +19,17 @@ class RefreshOrchestrator:
     async def refresh_all_now(self, organization_id: int) -> tuple[list[str], list[str]]:
         service = BalanceService(self.session, organization_id=organization_id)
         return await service.refresh_all()
+
+    async def queue_refresh_for_organization(
+        self,
+        organization_id: int,
+        payload: dict[str, Any] | None = None,
+    ) -> list[SyncJob]:
+        service = SyncJobService(self.session)
+        return await service.queue_refresh_for_organization(
+            organization_id=organization_id,
+            payload=payload,
+        )
 
     async def queue_integration_refresh(
         self,

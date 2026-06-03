@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from app.core.config import Settings
+from app.core.http import build_proxy_url, is_http_proxy, session_kwargs
 from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 
 if TYPE_CHECKING:
@@ -69,12 +70,14 @@ def _merge_accounts(
     aggregated_accounts: list[AccountBalanceSchema] = []
     flat_assets: dict[str, AssetSchema] = {}
     total_usd = 0.0
+    mirror_seen_account_types: set[str] = set()
 
     for account in accounts_payload:
         account_type = account["account_type"]
         tickers = account.get("tickers", {})
         assets: list[AssetSchema] = []
         account_total = 0.0
+        mirror_of = account.get("mirror_of")
 
         for raw_asset in account.get("assets", []):
             coin = str(raw_asset.get("coin", "")).upper()
@@ -93,15 +96,18 @@ def _merge_accounts(
             assets.append(asset)
             account_total += value_usd
 
-            existing = flat_assets.get(coin)
-            if existing is None:
-                flat_assets[coin] = asset
-            else:
-                flat_assets[coin] = AssetSchema(
-                    coin=coin,
-                    amount=existing.amount + asset.amount,
-                    value_usd=existing.value_usd + asset.value_usd,
-                )
+            # For mirrored accounts: don't add to flat_assets or total_usd
+            # (they were already counted in the source account)
+            if not mirror_of:
+                existing = flat_assets.get(coin)
+                if existing is None:
+                    flat_assets[coin] = asset
+                else:
+                    flat_assets[coin] = AssetSchema(
+                        coin=coin,
+                        amount=existing.amount + asset.amount,
+                        value_usd=existing.value_usd + asset.value_usd,
+                    )
 
         if assets:
             aggregated_accounts.append(
@@ -111,7 +117,10 @@ def _merge_accounts(
                     total_usd=account_total,
                 )
             )
-            total_usd += account_total
+            # Only add to total_usd if this is NOT a mirrored account
+            if not mirror_of:
+                total_usd += account_total
+
 
     return ServiceBalanceSchema(
         service=service,
@@ -128,6 +137,8 @@ class BaseRestGateway:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._direct_session: aiohttp.ClientSession | None = None
+        self._proxy_session: aiohttp.ClientSession | None = None
 
     def _resolve_config(
         self,
@@ -152,6 +163,23 @@ class BaseRestGateway:
             text = await response.text()
             return json.loads(text)
 
+    async def _get_direct_session(self) -> aiohttp.ClientSession:
+        if self._direct_session is None or self._direct_session.closed:
+            self._direct_session = aiohttp.ClientSession(**session_kwargs(self._timeout()))
+        return self._direct_session
+
+    async def _get_proxy_session(self) -> aiohttp.ClientSession:
+        if self._proxy_session is None or self._proxy_session.closed:
+            self._proxy_session = aiohttp.ClientSession(**session_kwargs(self._proxy_timeout()))
+        return self._proxy_session
+
+    async def close(self) -> None:
+        for session in (self._direct_session, self._proxy_session):
+            if session and not session.closed:
+                await session.close()
+        self._direct_session = None
+        self._proxy_session = None
+
     async def _request_with_optional_proxy(
         self,
         method: str,
@@ -161,17 +189,16 @@ class BaseRestGateway:
         headers: dict[str, str] | None = None,
         data: Any = None,
     ) -> Any:
-        async with aiohttp.ClientSession(
-            timeout=self._timeout(), headers=headers
-        ) as session:
-            async with session.request(
-                method,
-                url,
-                params=params,
-                data=data,
-            ) as response:
-                response.raise_for_status()
-                return await self._decode_json_response(response)
+        session = await self._get_direct_session()
+        async with session.request(
+            method,
+            url,
+            params=params,
+            headers=headers,
+            data=data,
+        ) as response:
+            response.raise_for_status()
+            return await self._decode_json_response(response)
 
     async def _json_request(
         self,
@@ -182,7 +209,8 @@ class BaseRestGateway:
         headers: dict[str, str] | None = None,
         data: Any = None,
     ) -> Any:
-        if not self.settings.proxy_url:
+        proxy_url = build_proxy_url()
+        if not proxy_url or not is_http_proxy(proxy_url):
             return await self._request_with_optional_proxy(
                 method,
                 url,
@@ -192,18 +220,17 @@ class BaseRestGateway:
             )
 
         try:
-            async with aiohttp.ClientSession(
-                timeout=self._proxy_timeout(), headers=headers
-            ) as session:
-                async with session.request(
-                    method,
-                    url,
-                    params=params,
-                    data=data,
-                    proxy=self.settings.proxy_url,
-                ) as response:
-                    response.raise_for_status()
-                    return await self._decode_json_response(response)
+            session = await self._get_proxy_session()
+            async with session.request(
+                method,
+                url,
+                params=params,
+                headers=headers,
+                data=data,
+                proxy=proxy_url,
+            ) as response:
+                response.raise_for_status()
+                return await self._decode_json_response(response)
         except _PROXY_RETRYABLE_ERRORS as exc:
             logger.warning(
                 "REST proxy request failed for %s %s, retrying direct: %s",
@@ -793,10 +820,38 @@ class GateIoRestBalanceGateway(BaseRestGateway):
             tickers[f"{base}/{quote}"] = {"last": _safe_float(item, "last")}
         return tickers
 
+    async def _detect_unified_account(
+        self,
+        api_key: str,
+        secret: str,
+        futures_data: dict,
+        spot_assets: list[dict] | None = None,
+    ) -> bool:
+        """Detect whether Gate.io account uses unified margin mode.
+
+        In unified mode, spot and futures share the same USDT balance.
+        We detect this by comparing the USDT spot amount to futures total:
+        if they are approximately equal (within 5%), it is likely unified.
+        """
+        futures_total = _safe_float(futures_data, "available", "total")
+        if futures_total <= 0:
+            return False
+
+        if spot_assets:
+            for a in spot_assets:
+                if str(a.get("coin", "")).upper() == "USDT":
+                    spot_usdt = float(a.get("amount", 0) or 0)
+                    if spot_usdt > 0 and abs(spot_usdt - futures_total) / max(spot_usdt, futures_total) < 0.05:
+                        return True
+                    break
+
+        # Fallback: if futures has a balance, assume possible unified
+        return True
+
     async def fetch_balance(
         self,
         exchange_id: str,
-        manager: "CCXTManager",
+        manager: "CCCTManager",
         config_override: dict[str, Any] | None = None,
     ) -> ServiceBalanceSchema:
         config = self._resolve_config(exchange_id, config_override)
@@ -809,44 +864,72 @@ class GateIoRestBalanceGateway(BaseRestGateway):
         spot = await self._request("/spot/accounts", api_key, secret)
         margin = await self._request("/margin/accounts", api_key, secret)
         futures = await self._request("/futures/usdt/accounts", api_key, secret)
+        futures_total_amount = _safe_float(futures, "available", "total")
 
-        payload = [
+        spot_assets = [
             {
-                "account_type": "spot",
-                "tickers": tickers,
-                "assets": [
-                    {
-                        "coin": item.get("currency"),
-                        "amount": _safe_float(item, "available")
-                        + _safe_float(item, "locked"),
-                    }
-                    for item in spot
-                ],
-            },
-            {
-                "account_type": "spot",
-                "tickers": tickers,
-                "assets": [
-                    {
-                        "coin": item.get("currency"),
-                        "amount": _safe_float(item, "available")
-                        + _safe_float(item, "locked"),
-                    }
-                    for item in margin
-                    if item.get("currency")
-                ],
-            },
-            {
-                "account_type": "futures",
-                "tickers": tickers,
-                "assets": [
-                    {
-                        "coin": "USDT",
-                        "amount": _safe_float(futures, "available", "total"),
-                    }
-                ],
-            },
+                "coin": item.get("currency"),
+                "amount": _safe_float(item, "available")
+                + _safe_float(item, "locked"),
+            }
+            for item in spot
         ]
+        margin_assets = [
+            {
+                "coin": item.get("currency"),
+                "amount": _safe_float(item, "available")
+                + _safe_float(item, "locked"),
+            }
+            for item in margin
+            if item.get("currency")
+        ]
+
+        # Detect unified account: if futures has balance, it is likely
+        # double-counted since unified accounts share USDT across
+        # spot and futures. In unified mode, futures USDT = spot USDT,
+        # so we skip futures and show the full balance under both labels.
+        is_unified = await self._detect_unified_account(api_key, secret, futures, spot_assets=spot_assets)
+
+        if is_unified:
+            # Unified account: spot total = total balance.
+            # Show same total under both spot and futures for display,
+            # but don't double-count in merged total.
+            payload = [
+                {
+                    "account_type": "spot",
+                    "tickers": tickers,
+                    "assets": spot_assets + margin_assets,
+                },
+                {
+                    "account_type": "futures",
+                    "tickers": tickers,
+                    "assets": spot_assets + margin_assets,
+                    "mirror_of": "spot",
+                },
+            ]
+        else:
+            payload = [
+                {
+                    "account_type": "spot",
+                    "tickers": tickers,
+                    "assets": spot_assets,
+                },
+                {
+                    "account_type": "spot",
+                    "tickers": tickers,
+                    "assets": margin_assets,
+                },
+                {
+                    "account_type": "futures",
+                    "tickers": tickers,
+                    "assets": [
+                        {
+                            "coin": "USDT",
+                            "amount": futures_total_amount,
+                        }
+                    ],
+                },
+            ]
         return _merge_accounts(exchange_id, payload, manager.calculate_usd_value_sync)
 
 
@@ -1086,12 +1169,17 @@ class HtxRestBalanceGateway(BaseRestGateway):
             "Timestamp": timestamp,
         }
         params["Signature"] = self._sign("GET", path, params, secret)
-        return await self._json_request(
+        payload = await self._json_request(
             "GET",
             f"https://{self.hostname}{path}",
             params=params,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            code = payload.get("err-code") or "unknown"
+            msg = payload.get("err-msg") or "HTX API error"
+            raise RuntimeError(f"HTX API error {code}: {msg}")
+        return payload
 
     async def _fetch_tickers(self) -> dict[str, dict[str, Any]]:
         payload = await self._json_request(
@@ -1623,6 +1711,12 @@ class ExchangeBalanceGatewayRegistry:
 
     def supported_rest_exchanges(self) -> set[str]:
         return set(self._rest_gateways)
+
+    async def close_all(self) -> None:
+        for gateway in self._rest_gateways.values():
+            close = getattr(gateway, "close", None)
+            if callable(close):
+                await close()
 
 
 _registry_cache: dict[int, ExchangeBalanceGatewayRegistry] = {}

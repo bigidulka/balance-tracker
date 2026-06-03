@@ -15,6 +15,7 @@ INPUT_KIND_ALIASES = {
     "integration_dex_chain": "dc",
     "integration_cex_account_ref": "ca",
     "integration_cex_api_key": "ck",
+    "integration_cex_api_token": "ct",
     "integration_cex_api_secret": "cs",
     "integration_cex_api_password": "cp",
     "integration_rename": "rn",
@@ -39,6 +40,7 @@ ROUTE_FUTURES_LIST = "fl"
 ROUTE_FUTURES_DETAIL = "fd"
 ROUTE_DEX = "dx"
 ROUTE_TRANSACTIONS = "tx"
+ROUTE_NOTIFICATIONS = "nt"
 ROUTE_INTEGRATIONS = "ig"
 ROUTE_INTEGRATION_DETAIL = "id"
 ROUTE_INTEGRATION_EXCHANGE_PICKER = "ix"

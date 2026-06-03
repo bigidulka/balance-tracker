@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.balance import Integration, SyncJob
+from app.models.balance import Integration, IntegrationSecret, SyncJob
 from app.repositories.balance import BalanceRepository, ServiceStatusRepository
 from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 from app.services.entitlements_service import EntitlementsService
@@ -314,7 +314,11 @@ class SyncJobService:
 
     async def run_claimed_job(self, job: SyncJob) -> SyncJob:
         try:
-            await self.entitlements.ensure_refresh_interval_for_organization(job.organization_id)
+            payload = dict(job.payload or {})
+            if payload.get("enforce_refresh_interval_at_run"):
+                await self.entitlements.ensure_refresh_interval_for_organization(
+                    job.organization_id
+                )
 
             integration_result = await self.session.execute(
                 select(Integration).where(Integration.id == job.integration_id)
@@ -325,11 +329,25 @@ class SyncJobService:
                 raise ValueError(f"Integration {job.integration_id} not found")
 
             provider = get_provider(integration.provider)
+
+            # Inject integration secrets into payload so providers
+            # like cryptobot can access api_token from payload["api_token"]
+            secrets_rows = await self.session.execute(
+                select(IntegrationSecret).where(
+                    IntegrationSecret.integration_id == integration.id
+                )
+            )
+            secrets_list = secrets_rows.scalars().all()
+            for secret in secrets_list:
+                if secret.key_name and secret.secret_value:
+                    payload[secret.key_name] = secret.secret_value
+
             refresh_result = await provider.refresh(
                 organization_id=job.organization_id,
                 integration=integration,
-                payload=job.payload or {},
+                payload=payload,
             )
+
             await self._persist_balance_from_refresh_result(
                 organization_id=job.organization_id,
                 refresh_data=refresh_result.data,

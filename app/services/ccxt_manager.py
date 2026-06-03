@@ -15,6 +15,8 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 import aiohttp
 import ccxt.pro as ccxtpro
 
+from app.core.http import build_proxy_url, is_http_proxy, is_socks_proxy, request_proxy_kwargs, session_kwargs
+
 try:
     from ccxt.base.errors import NotSupported as CCXTNotSupported
 except Exception:
@@ -459,8 +461,13 @@ class CCXTManager:
         timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
         async def _request(proxy: str | None) -> Any:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers, proxy=proxy) as resp:
+            async with aiohttp.ClientSession(**session_kwargs(timeout)) as session:
+                kwargs = {"headers": headers}
+                if proxy and is_http_proxy(proxy):
+                    kwargs["proxy"] = proxy
+                elif request_proxy_kwargs():
+                    kwargs.update(request_proxy_kwargs())
+                async with session.get(url, **kwargs) as resp:
                     resp.raise_for_status()
                     return await resp.json()
 
@@ -529,8 +536,12 @@ class CCXTManager:
             }
             if memo:
                 exchange_config["uid"] = memo
-            if settings.proxy_url:
-                exchange_config["aiohttp_proxy"] = settings.proxy_url
+            proxy_url = build_proxy_url()
+            if proxy_url:
+                if is_socks_proxy(proxy_url):
+                    exchange_config["socksProxy"] = proxy_url
+                else:
+                    exchange_config["aiohttp_proxy"] = proxy_url
 
             temp_exchange = ccxtpro.bitmart(exchange_config)
             try:
@@ -630,12 +641,16 @@ class CCXTManager:
                 if config.get("uid"):
                     exchange_config["uid"] = config["uid"]
 
-                if settings.proxy_url:
-                    exchange_config["aiohttp_proxy"] = settings.proxy_url
-                    exchange_config["proxies"] = {
-                        "http": settings.proxy_url,
-                        "https": settings.proxy_url,
-                    }
+                proxy_url = build_proxy_url()
+                if proxy_url:
+                    if is_socks_proxy(proxy_url):
+                        exchange_config["socksProxy"] = proxy_url
+                    else:
+                        exchange_config["aiohttp_proxy"] = proxy_url
+                        exchange_config["proxies"] = {
+                            "http": proxy_url,
+                            "https": proxy_url,
+                        }
 
                 self._exchanges[cache_key] = exchange_class(exchange_config)
 
@@ -1058,6 +1073,21 @@ class CCXTManager:
                 all_assets: dict[str, AssetSchema] = {}
                 total_usd = 0.0
 
+                # Gate.io unified account dedup:
+                # In unified mode, spot and futures share the same USDT balance.
+                # Detect by comparing USDT amounts and skip futures if mirrored.
+                unified_account_detected = False
+                if exchange_id == "gateio" and accounts_data["spot"] and accounts_data["futures"]:
+                    spot_usdt = accounts_data["spot"].get("USDT")
+                    futures_total_amount = accounts_totals.get("futures", 0.0)
+                    if spot_usdt and futures_total_amount > 0:
+                        spot_usdt_val = spot_usdt.value_usd if isinstance(spot_usdt, AssetSchema) else float(spot_usdt)
+                        if abs(spot_usdt_val - futures_total_amount) / max(spot_usdt_val, futures_total_amount) < 0.05:
+                            unified_account_detected = True
+                            # Copy spot assets into futures for display
+                            accounts_data["futures"] = dict(accounts_data["spot"])
+                            accounts_totals["futures"] = accounts_totals["spot"]
+
                 for acc_type in ["spot", "futures"]:
                     if accounts_data[acc_type]:
                         assets_list = list(accounts_data[acc_type].values())
@@ -1068,18 +1098,26 @@ class CCXTManager:
                                 total_usd=accounts_totals[acc_type],
                             )
                         )
-                        total_usd += accounts_totals[acc_type]
+                        # For unified accounts, don't double-count futures
+                        if unified_account_detected and acc_type == "futures":
+                            pass  # skip total_usd addition
+                        else:
+                            total_usd += accounts_totals[acc_type]
 
-                        for asset in assets_list:
-                            if asset.coin in all_assets:
-                                existing = all_assets[asset.coin]
-                                all_assets[asset.coin] = AssetSchema(
-                                    coin=asset.coin,
-                                    amount=existing.amount + asset.amount,
-                                    value_usd=existing.value_usd + asset.value_usd,
-                                )
-                            else:
-                                all_assets[asset.coin] = asset
+
+                        # For unified accounts, don't double-count futures assets
+                        if not (unified_account_detected and acc_type == "futures"):
+                            for asset in assets_list:
+                                if asset.coin in all_assets:
+                                    existing = all_assets[asset.coin]
+                                    all_assets[asset.coin] = AssetSchema(
+                                        coin=asset.coin,
+                                        amount=existing.amount + asset.amount,
+                                        value_usd=existing.value_usd + asset.value_usd,
+                                    )
+                                else:
+                                    all_assets[asset.coin] = asset
+
 
                 return ServiceBalanceSchema(
                     service=exchange_id,
@@ -1481,12 +1519,16 @@ class CCXTManager:
             exchange_config["password"] = api_password
         if api_uid:
             exchange_config["uid"] = api_uid
-        if settings.proxy_url:
-            exchange_config["aiohttp_proxy"] = settings.proxy_url
-            exchange_config["proxies"] = {
-                "http": settings.proxy_url,
-                "https": settings.proxy_url,
-            }
+        proxy_url = build_proxy_url()
+        if proxy_url:
+            if is_socks_proxy(proxy_url):
+                exchange_config["socksProxy"] = proxy_url
+            else:
+                exchange_config["aiohttp_proxy"] = proxy_url
+                exchange_config["proxies"] = {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
 
         exchange = exchange_class(exchange_config)
         try:
@@ -1513,6 +1555,13 @@ class CCXTManager:
 
     async def close_all(self):
         """Закрывает все соединения"""
+        if self._balance_gateway_registry is not None:
+            try:
+                await self._balance_gateway_registry.close_all()
+            except Exception as e:
+                logger.error(f"Error closing REST balance gateways: {e}")
+            self._balance_gateway_registry = None
+
         for exchange_id, exchange in self._exchanges.items():
             try:
                 await exchange.close()

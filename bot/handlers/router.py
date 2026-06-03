@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from aiogram import F, Router
@@ -56,6 +58,7 @@ from bot.state.repository import UiStateRepository
 from bot.states.input import UiInputStates
 
 router = Router(name="main")
+logger = logging.getLogger(__name__)
 
 
 def _access_denied_reason_text(reason: str) -> str:
@@ -91,6 +94,11 @@ async def _render_and_edit(
     source_route: str | None,
     push_current: bool,
 ) -> None:
+    t0 = time.monotonic()
+    # Answer callback IMMEDIATELY so user sees the loading indicator
+    await callback.answer()
+    t_answer = time.monotonic()
+
     if push_current:
         ui_state = await nav_service.forward(
             state,
@@ -105,6 +113,7 @@ async def _render_and_edit(
             payload=payload,
             source_route=source_route,
         )
+    t_nav = time.monotonic()
 
     rendered = await screen_service.render(
         route=ui_state.current_route,
@@ -112,7 +121,18 @@ async def _render_and_edit(
         user_id=callback.from_user.id,
         rev=ui_state.revision,
     )
+    t_render = time.monotonic()
     await _edit_message(callback.message, rendered)
+    t_edit = time.monotonic()
+    logger.info(
+        "callback_timing route=%s answer_ms=%d nav_ms=%d render_ms=%d edit_ms=%d total_ms=%d",
+        ui_state.current_route,
+        int((t_answer - t0) * 1000),
+        int((t_nav - t_answer) * 1000),
+        int((t_render - t_nav) * 1000),
+        int((t_edit - t_render) * 1000),
+        int((t_edit - t0) * 1000),
+    )
 
 
 async def _recover_current(
@@ -145,6 +165,8 @@ async def cmd_start(
     screen_service: ScreenService,
 ) -> None:
     user_id = message.from_user.id
+    logger.info("cmd_start user_id=%s", user_id)
+
     denied = await screen_service.ensure_access(user_id)
     if denied:
         ui_state = await ui_state_repo.load(state)
@@ -173,23 +195,52 @@ async def cmd_start(
         payload={},
         source_route=None,
     )
-    rendered = await screen_service.render(
-        route=ROUTE_MAIN, payload={}, user_id=user_id, rev=ui_state.revision
-    )
 
-    if ui_state.anchor_message_id is not None:
+    # Reply immediately so /start never appears frozen while dashboard loads.
+    sent = await message.answer(**msg.loading_text("Loading dashboard...").as_kwargs())
+    await ui_state_repo.save_anchor(state, sent.message_id)
+
+    try:
+        import asyncio
+        rendered = await asyncio.wait_for(
+            screen_service.render(
+                route=ROUTE_MAIN, payload={}, user_id=user_id, rev=ui_state.revision
+            ),
+            timeout=20,
+        )
+        await _edit_message(sent, rendered)
+    except Exception as exc:
+        logger.warning("cmd_start_render_failed user_id=%s error=%s", user_id, exc)
+        fallback = RenderedScreen(
+            route=ROUTE_MAIN,
+            payload={},
+            text=msg.dashboard_text(
+                {
+                    "total_usd": 0.0,
+                    "exchanges_count": 0,
+                    "spot_total": 0.0,
+                    "futures_total": 0.0,
+                    "dex_total": 0.0,
+                    "plan": {"name": "-", "code": "unknown"},
+                    "capabilities": {"can_refresh": True},
+                    "throttling": {},
+                    "integrations": {"total": 0, "active": 0},
+                    "transactions_24h": {"total": 0, "pending": 0, "failed": 0},
+                    "freshness": "temporarily unavailable",
+                }
+            ),
+            keyboard=await screen_service.render(
+                route=ROUTE_MAIN, payload={}, user_id=user_id, rev=ui_state.revision
+            ).keyboard if False else None,
+        )
+        # If fallback rendering fails, leave loading message instead of crashing.
         try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=ui_state.anchor_message_id,
-                **msg.as_edit_kwargs(rendered.text, rendered.keyboard),
+            rendered = await screen_service.render(
+                route=ROUTE_MAIN, payload={}, user_id=user_id, rev=ui_state.revision
             )
-            return
+            await _edit_message(sent, rendered)
         except Exception:
             pass
-
-    sent = await _answer_message(message, rendered)
-    await ui_state_repo.ensure_anchor(state, sent.message_id)
 
 
 @router.callback_query()
@@ -258,9 +309,13 @@ async def handle_callback(
 
     payload = parse_payload_jsonish(command.payload)
 
+    # Answer callback IMMEDIATELY for all navigation actions to reduce perceived latency
+    # (user sees instant response, message edits come shortly after)
+    if command.action not in (ACTION_REFRESH,) and command.route != ROUTE_PLAN:
+        await callback.answer()
+
     try:
         if command.action == ACTION_NOOP:
-            await callback.answer()
             return
 
         if command.action == ACTION_BACK:
@@ -275,7 +330,6 @@ async def handle_callback(
                 rev=next_state.revision,
             )
             await _edit_message(callback.message, rendered)
-            await callback.answer()
             return
 
         if command.route == ROUTE_MAIN and command.action == ACTION_REFRESH:
@@ -292,6 +346,18 @@ async def handle_callback(
                 push_current=False,
             )
             return
+
+        if (
+            command.route == ROUTE_MAIN
+            and command.action == ACTION_SELECT
+            and str(payload.get("field") or "") == "notifications"
+        ):
+            await callback.answer(
+                "\U0001f6a7 Under development",
+                show_alert=True,
+            )
+            return
+
 
         if command.route == ROUTE_PLAN and command.action == ACTION_REFRESH:
             await callback.answer("Refreshing...")
@@ -360,19 +426,14 @@ async def handle_callback(
 
             price = float(selected_plan.get("price_monthly") or 0.0)
             if price <= 0:
-                await screen_service.switch_plan(plan_code)
-                await callback.answer("Plan updated")
-                await _render_and_edit(
-                    callback,
-                    state=state,
-                    screen_service=screen_service,
-                    nav_service=nav_service,
-                    route=ROUTE_PLAN,
-                    payload={},
-                    source_route=ui_state.source_route,
-                    push_current=False,
+                # Free-tier switching is disabled — user must pay
+                await callback.answer(
+                    "Payment required to change plan",
+                    show_alert=True,
                 )
                 return
+
+
 
             created = await screen_service.create_plan_invoice(plan_code, price)
             invoice_id = (
@@ -533,7 +594,6 @@ async def handle_callback(
                 source_route=ui_state.source_route,
                 push_current=False,
             )
-            await callback.answer()
             return
 
         if command.route == ROUTE_TRANSACTIONS and command.action == ACTION_RESET:
@@ -550,7 +610,6 @@ async def handle_callback(
                 source_route=ui_state.source_route,
                 push_current=False,
             )
-            await callback.answer()
             return
 
         if command.route == ROUTE_SETTINGS and command.action == ACTION_TOGGLE:
@@ -565,16 +624,18 @@ async def handle_callback(
                 source_route=ui_state.source_route,
                 push_current=False,
             )
-            await callback.answer()
             return
 
         if command.route == ROUTE_SETTINGS and command.action == ACTION_SELECT:
             field = str(payload.get("field") or "")
-            await screen_service.apply_transactions_filter(
-                user_id=callback.from_user.id,
-                field=field,
-                value=str(payload.get("value") or ""),
-            )
+            if field == "currency":
+                await screen_service.cycle_display_currency(user_id=callback.from_user.id)
+            else:
+                await screen_service.apply_transactions_filter(
+                    user_id=callback.from_user.id,
+                    field=field,
+                    value=str(payload.get("value") or ""),
+                )
             await _render_and_edit(
                 callback,
                 state=state,
@@ -585,8 +646,8 @@ async def handle_callback(
                 source_route=ui_state.source_route,
                 push_current=False,
             )
-            await callback.answer()
             return
+
 
         if (
             command.route == ROUTE_ADMIN_USER_DETAIL
@@ -621,7 +682,6 @@ async def handle_callback(
                 source_route=ui_state.source_route,
                 push_current=False,
             )
-            await callback.answer()
             return
 
         if (

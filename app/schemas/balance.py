@@ -40,6 +40,9 @@ class RefreshResponse(BaseModel):
     message: str
     updated_services: list[str]
     failed_services: list[str]
+    queued: bool = False
+    job_ids: list[int] = Field(default_factory=list)
+    job_status: str | None = None
 
 
 class HistoryEntrySchema(BaseModel):
@@ -102,6 +105,23 @@ class DashboardSummaryResponse(BaseModel):
     integrations: dict[str, int]
     transactions_24h: dict[str, int]
     timestamp: datetime
+    # Trader metrics
+    balance_today_start: float | None = None
+    balance_24h_ago: float | None = None
+    balance_7d_ago: float | None = None
+    balance_30d_ago: float | None = None
+    pnl_today: float | None = None
+    pnl_today_pct: float | None = None
+    pnl_24h: float | None = None
+    pnl_24h_pct: float | None = None
+    pnl_7d: float | None = None
+    pnl_7d_pct: float | None = None
+    pnl_30d: float | None = None
+    pnl_30d_pct: float | None = None
+    avg_daily_pnl: float | None = None
+    best_day_pnl: float | None = None
+    worst_day_pnl: float | None = None
+
 
 
 # ==================== Transaction Schemas ====================

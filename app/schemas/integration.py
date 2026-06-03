@@ -16,10 +16,16 @@ class IntegrationCreateRequest(BaseModel):
     api_secret: str | None = None
     api_password: str | None = None
     api_uid: str | None = None
+    api_token: str | None = None
 
     @model_validator(mode="after")
     def validate_identity(self) -> "IntegrationCreateRequest":
         if self.kind == "cex":
+            # For cryptobot providers, exchange_code auto-fills
+            provider_lower = str(self.provider or "").strip().lower()
+            is_cryptobot = provider_lower in {"cryptobot", "cryptobot_apps"}
+            if is_cryptobot and not self.exchange_code:
+                self.exchange_code = "cryptobot"
             if not self.exchange_code or not self.account_ref:
                 raise ValueError(
                     "exchange_code and account_ref are required for cex kind"
@@ -28,6 +34,7 @@ class IntegrationCreateRequest(BaseModel):
             if not self.wallet_address or not self.chain:
                 raise ValueError("wallet_address and chain are required for dex kind")
         return self
+
 
 
 class IntegrationResponse(BaseModel):
@@ -58,10 +65,11 @@ class IntegrationRefreshResponse(BaseModel):
 
 class IntegrationVerifyRequest(BaseModel):
     exchange_code: str
-    api_key: str
-    api_secret: str
+    api_key: str | None = None
+    api_secret: str | None = None
     api_password: str | None = None
     api_uid: str | None = None
+    api_token: str | None = None
 
 
 class IntegrationVerifyResponse(BaseModel):

@@ -30,6 +30,7 @@ from bot.contracts.callbacks import (
     ROUTE_INTEGRATION_WALLET_PICKER,
     ROUTE_INTEGRATIONS,
     ROUTE_MAIN,
+    ROUTE_NOTIFICATIONS,
     ROUTE_PAYMENTS,
     ROUTE_PLAN,
     ROUTE_ADMIN,
@@ -46,7 +47,9 @@ from bot.contracts.exchange_emojis import resolve_exchange_emoji_id
 from bot.contracts.exchanges import SUPPORTED_CEX_EXCHANGES
 from bot.contracts.wallets import SUPPORTED_WALLET_PROVIDERS
 from bot.i18n import locale_label, t
+from bot.messages import format_usd
 from bot.ui_emoji import UI_ICONS as _ICON_IDS
+
 
 
 def _payload(**kwargs: object) -> str:
@@ -149,19 +152,23 @@ def main_menu(
             "integrations",
         ),
         _btn(
+            t(locale, "notifications"),
+            pack_callback(ROUTE_NOTIFICATIONS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
+            "notifications",
+        ),
+    )
+    builder.row(
+        _btn(
+            t(locale, "plan"),
+            pack_callback(ROUTE_PLAN, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
+            "plan",
+        ),
+        _btn(
             t(locale, "settings"),
             pack_callback(ROUTE_SETTINGS, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
             "settings",
         ),
     )
-    if plan_label:
-        builder.row(
-            _btn(
-                t(locale, "plan"),
-                pack_callback(ROUTE_PLAN, ACTION_OPEN, rev=rev, source=ROUTE_MAIN),
-                "plan",
-            )
-        )
     refresh_base = t(locale, "refresh")
     if refresh_time_label:
         refresh_base = f"{refresh_base} {refresh_time_label}"
@@ -185,20 +192,30 @@ def _exchange_list(
     route: str,
     detail_route: str,
     exchanges: list[str],
+    labels: list[str] | None = None,
     page: int,
     per_page: int,
     rev: int,
     locale: str,
     refresh_time_label: str | None = None,
 ) -> InlineKeyboardMarkup:
+    """Build exchange list keyboard.
+
+    exchanges — service key list (used for navigation index)
+    labels    — human-readable button labels (parallel to exchanges).
+                Falls back to exchanges when not provided.
+    """
+    effective_labels = labels if labels is not None else exchanges
     builder = InlineKeyboardBuilder()
     start = page * per_page
     end = start + per_page
-    for idx, exchange in enumerate(exchanges[start:end], start=start):
+    for idx, (exchange, label) in enumerate(
+        zip(exchanges[start:end], effective_labels[start:end]), start=start
+    ):
         exchange_emoji_id = resolve_exchange_emoji_id(exchange)
         builder.row(
             _btn(
-                exchange,
+                label,
                 pack_callback(
                     detail_route,
                     ACTION_SELECT,
@@ -254,12 +271,14 @@ def spot_exchanges(
     rev: int,
     *,
     locale: str,
+    labels: list[str] | None = None,
     refresh_time_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     return _exchange_list(
         route=ROUTE_SPOT_LIST,
         detail_route=ROUTE_SPOT_DETAIL,
         exchanges=exchanges,
+        labels=labels,
         page=page,
         per_page=per_page,
         rev=rev,
@@ -275,12 +294,14 @@ def futures_exchanges(
     rev: int,
     *,
     locale: str,
+    labels: list[str] | None = None,
     refresh_time_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     return _exchange_list(
         route=ROUTE_FUTURES_LIST,
         detail_route=ROUTE_FUTURES_DETAIL,
         exchanges=exchanges,
+        labels=labels,
         page=page,
         per_page=per_page,
         rev=rev,
@@ -495,7 +516,13 @@ def dex_wallet_detail(
 
 
 def settings(
-    hide_small: bool, language: str, rev: int, *, locale: str, is_admin: bool = False
+    hide_small: bool,
+    language: str,
+    rev: int,
+    *,
+    locale: str,
+    is_admin: bool = False,
+    display_currency: str = "USD",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -506,6 +533,18 @@ def settings(
                 ACTION_SELECT,
                 rev=rev,
                 payload=_payload(field="language"),
+            ),
+            "settings",
+        )
+    )
+    builder.row(
+        _btn(
+            f"{t(locale, 'display_currency')}: {display_currency}",
+            pack_callback(
+                ROUTE_SETTINGS,
+                ACTION_SELECT,
+                rev=rev,
+                payload=_payload(field="currency"),
             ),
             "settings",
         )
@@ -535,6 +574,7 @@ def settings(
     return builder.as_markup()
 
 
+
 def plan_screen(
     rev: int,
     *,
@@ -552,13 +592,16 @@ def plan_screen(
             label = f"{plan_name} · {t(locale, 'current_plan_short')}"
             callback = pack_callback(ROUTE_PLAN, ACTION_NOOP, rev=rev)
         else:
-            label = plan_name
+            item_price = float(plan.get("price_monthly") or 0.0)
+            price_label = format_usd(item_price) if item_price > 0 else t(locale, "free")
+            label = f"{plan_name} · {price_label}"
             callback = pack_callback(
                 ROUTE_PLAN,
                 ACTION_SELECT,
                 rev=rev,
                 payload=_payload(plan_code=plan_code),
             )
+
         builder.row(_btn(label, callback, "plan"))
     builder.row(
         _btn(
@@ -587,15 +630,28 @@ def plan_screen(
 def payments_screen(
     *,
     invoice_id: int | None,
+    invoice_url: str | None = None,
     rev: int,
     locale: str,
     refresh_time_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    # User wallet / external wallet entrypoint
+    builder.row(
+        InlineKeyboardButton(
+            text=(
+                "🤖 CryptoBot · user wallet"
+                if locale == "en"
+                else "🤖 CryptoBot · кошелек пользователя"
+            ),
+            url="https://t.me/CryptoBot",
+        )
+    )
+    # App wallet top-up shortcuts
     for amount in (10, 25, 50, 100):
         builder.row(
             _btn(
-                f"${amount}",
+                f"💳 +${amount}",
                 pack_callback(
                     ROUTE_PAYMENTS,
                     ACTION_SELECT,
@@ -603,6 +659,13 @@ def payments_screen(
                     payload=_payload(amount=amount),
                 ),
                 "wallet",
+            )
+        )
+    if invoice_url:
+        builder.row(
+            InlineKeyboardButton(
+                text=("🧾 Open invoice" if locale == "en" else "🧾 Открыть чек"),
+                url=invoice_url,
             )
         )
     if invoice_id is not None:
