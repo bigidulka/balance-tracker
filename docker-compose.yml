@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: balance-tracker-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: balance-tracker-redis
@@ -38,7 +55,12 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=true
+      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
       - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
       - BOT_PROXY=${BOT_PROXY:-}
       - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
@@ -53,6 +75,8 @@ services:
       retries: 12
       start_period: 15s
     depends_on:
+      postgres:
+        condition: service_healthy
       debank-sdk:
         condition: service_healthy
     restart: unless-stopped
@@ -69,7 +93,12 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=true
+      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
       - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
       - BOT_PROXY=${BOT_PROXY:-}
       - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
@@ -80,6 +109,8 @@ services:
       - SYNC_WORKER_POLL_INTERVAL_SECONDS=${SYNC_WORKER_POLL_INTERVAL_SECONDS:-2.0}
       - JOB_PARALLELISM=${JOB_PARALLELISM:-2}
     depends_on:
+      postgres:
+        condition: service_healthy
       debank-sdk:
         condition: service_healthy
     restart: unless-stopped
@@ -96,7 +127,12 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_USE_SQLITE=true
+      - DATABASE_USE_SQLITE=${DATABASE_USE_SQLITE:-false}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-balance_tracker}
+      - POSTGRES_USER=${POSTGRES_USER:-balance_tracker}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-balance_tracker}
       - DEBANK_SDK_BASE_URL=${DEBANK_SDK_BASE_URL:-http://debank-sdk:8080}
       - BOT_PROXY=${BOT_PROXY:-}
       - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
@@ -105,6 +141,8 @@ services:
       - REFRESH_SCHEDULER_MIN_INTERVAL_SECONDS=${REFRESH_SCHEDULER_MIN_INTERVAL_SECONDS:-60}
       - REFRESH_SCHEDULER_BATCH_SIZE=${REFRESH_SCHEDULER_BATCH_SIZE:-20}
     depends_on:
+      postgres:
+        condition: service_healthy
       debank-sdk:
         condition: service_healthy
     restart: unless-stopped
@@ -137,3 +175,4 @@ services:
 
 volumes:
   debank_sdk_data:
+  postgres_data:
