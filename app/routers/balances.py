@@ -121,6 +121,7 @@ def _day_start_for_offset(now: datetime, utc_offset_minutes: int) -> datetime:
 async def _invalidate_org_hot_cache(organization_id: int) -> None:
     await hot_response_cache.invalidate_prefix(f"balances_cached:")
     await hot_response_cache.invalidate_prefix(f"dashboard_summary:")
+    await hot_response_cache.invalidate_prefix(f"health:")
 
 
 def _db_cache_scope(db: AsyncSession) -> int:
@@ -690,6 +691,18 @@ async def get_health(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
+    return await hot_response_cache.get_or_set(
+        _hot_cache_key("health", db, organization_id),
+        ttl_seconds=settings.api_hot_cache_ttl_seconds,
+        loader=lambda: _get_health_uncached(db=db, organization_id=organization_id),
+    )
+
+
+async def _get_health_uncached(
+    *,
+    db: AsyncSession,
+    organization_id: int,
+) -> HealthResponse:
     repo = ServiceStatusRepository(db)
     statuses = await repo.get_all_statuses(organization_id=organization_id)
 

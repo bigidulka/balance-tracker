@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_organization_id, require_role
 from app.core.request_context import RequestContext, get_request_context
@@ -17,11 +18,24 @@ from app.schemas.balance import (
 from app.services.audit_log_service import AuditLogService
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.metrics_service import metrics_service
+from app.services.response_cache import hot_response_cache
 from app.services.transaction_service import TransactionService
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
+
+
+def _db_cache_scope(db: AsyncSession) -> int:
+    return id(db.bind) if db.bind is not None else 0
+
+
+def _hot_cache_key(name: str, db: AsyncSession, organization_id: int, *parts: object) -> str:
+    suffix = ":".join(str(part) for part in parts)
+    if suffix:
+        suffix = f":{suffix}"
+    return f"{name}:{_db_cache_scope(db)}:{organization_id}{suffix}"
 
 
 @router.get("", response_model=TransactionListResponse)
@@ -42,8 +56,9 @@ async def get_transactions(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
-    tx_service = TransactionService(db, organization_id=organization_id)
-    return await tx_service.get_transactions(
+    return await _get_transactions_cached(
+        db=db,
+        organization_id=organization_id,
         service=service,
         integration_id=integration_id,
         tx_type=tx_type,
@@ -68,8 +83,9 @@ async def get_deposits(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
-    tx_service = TransactionService(db, organization_id=organization_id)
-    return await tx_service.get_transactions(
+    return await _get_transactions_cached(
+        db=db,
+        organization_id=organization_id,
         service=service,
         integration_id=integration_id,
         tx_type="deposit",
@@ -94,11 +110,81 @@ async def get_withdrawals(
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
 ):
+    return await _get_transactions_cached(
+        db=db,
+        organization_id=organization_id,
+        service=service,
+        integration_id=integration_id,
+        tx_type="withdrawal",
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def _get_transactions_cached(
+    *,
+    db: AsyncSession,
+    organization_id: int,
+    service: Optional[str],
+    integration_id: Optional[int],
+    tx_type: Optional[str],
+    status: Optional[str],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+    limit: int,
+    offset: int,
+) -> TransactionListResponse:
+    return await hot_response_cache.get_or_set(
+        _hot_cache_key(
+            "transactions",
+            db,
+            organization_id,
+            service or "",
+            integration_id or "",
+            tx_type or "",
+            status or "",
+            start_date.isoformat() if start_date else "",
+            end_date.isoformat() if end_date else "",
+            limit,
+            offset,
+        ),
+        ttl_seconds=settings.api_hot_cache_ttl_seconds,
+        loader=lambda: _get_transactions_uncached(
+            db=db,
+            organization_id=organization_id,
+            service=service,
+            integration_id=integration_id,
+            tx_type=tx_type,
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+async def _get_transactions_uncached(
+    *,
+    db: AsyncSession,
+    organization_id: int,
+    service: Optional[str],
+    integration_id: Optional[int],
+    tx_type: Optional[str],
+    status: Optional[str],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
+    limit: int,
+    offset: int,
+) -> TransactionListResponse:
     tx_service = TransactionService(db, organization_id=organization_id)
     return await tx_service.get_transactions(
         service=service,
         integration_id=integration_id,
-        tx_type="withdrawal",
+        tx_type=tx_type,
         status=status,
         start_date=start_date,
         end_date=end_date,
@@ -130,6 +216,7 @@ async def refresh_transactions(
 ):
     tx_service = TransactionService(db, organization_id=organization_id)
     result = await tx_service.refresh_transactions(since_hours=since_hours)
+    await hot_response_cache.invalidate_prefix("transactions:")
 
     await AuditLogService(db).log_event(
         organization_id=organization_id,
