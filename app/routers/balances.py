@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Annotated, Optional
 
 import logging
 
@@ -105,6 +105,16 @@ def _is_shadowed_legacy_balance(balance: object, balances: list[object], active_
         and getattr(candidate, "integration_id", None) in active_ids
         for candidate in balances
     )
+
+
+def _day_start_for_offset(now: datetime, utc_offset_minutes: int) -> datetime:
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    offset = timedelta(minutes=utc_offset_minutes)
+    local_now = now + offset
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_start - offset
 
 
 @router.get("/balances", response_model=PortfolioResponse)
@@ -392,10 +402,18 @@ async def get_entitlements(
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary(
-    include_metrics: bool = Query(
-        False,
-        description="Include slower history-based trader metrics",
-    ),
+    include_metrics: Annotated[
+        bool,
+        Query(description="Include slower history-based trader metrics"),
+    ] = False,
+    utc_offset_minutes: Annotated[
+        int,
+        Query(
+            ge=-720,
+            le=840,
+            description="User timezone offset from UTC in minutes; default is Moscow time.",
+        ),
+    ] = 180,
     db: AsyncSession = Depends(get_db),
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("viewer")),
@@ -417,6 +435,7 @@ async def get_dashboard_summary(
     dex_total = 0.0
     exchanges_count = 0
     latest_updated_at: datetime | None = None
+    snapshot_keys: list[tuple[str, object]] = []
 
     for balance in balances:
         if balance.service not in allowed_services:
@@ -425,6 +444,9 @@ async def get_dashboard_summary(
             continue
         if not settings.is_service_enabled(balance.service):
             continue
+        snapshot_keys.append(
+            ("service_integration", (balance.service, getattr(balance, "integration_id", None)))
+        )
         total_usd += float(balance.total_usd)
         updated_at = balance.updated_at
         if latest_updated_at is None or updated_at > latest_updated_at:
@@ -516,21 +538,21 @@ async def get_dashboard_summary(
         try:
             import asyncio
 
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = _day_start_for_offset(now, utc_offset_minutes)
             snapshot_specs = [
-                (today_start, timedelta(hours=12)),
-                (now - timedelta(hours=24), timedelta(hours=12)),
-                (now - timedelta(days=7), timedelta(hours=12)),
-                (now - timedelta(days=30), timedelta(days=3)),
+                today_start,
+                now - timedelta(hours=24),
+                now - timedelta(days=7),
+                now - timedelta(days=30),
             ]
 
             async def _load_snapshot_values() -> list[float]:
                 values: list[float] = []
-                for point, lookback in snapshot_specs:
-                    value = await balance_repo.get_portfolio_snapshot_total_near(
+                for point in snapshot_specs:
+                    value = await balance_repo.get_portfolio_snapshot_total_for_keys(
                         organization_id=organization_id,
                         at=point,
-                        lookback=lookback,
+                        keys=snapshot_keys,
                     )
                     values.append(value)
                 return values

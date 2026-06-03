@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
 from app.models.balance import Balance, BalanceHistory, Integration, Organization, Transaction
-from app.routers.balances import get_dashboard_summary, get_history, get_history_chart
+from app.routers.balances import (
+    _day_start_for_offset,
+    get_dashboard_summary,
+    get_history,
+    get_history_chart,
+)
 from app.routers.integrations import (
     activate_integration,
     deactivate_integration,
@@ -171,6 +176,66 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["futures_total"], 0.0)
             self.assertEqual(payload["dex_total"], 50.0)
             self.assertTrue(payload["freshness"].startswith("updated_") or payload["freshness"] == "updated_just_now")
+
+    async def test_dashboard_pnl_uses_active_key_snapshot_without_short_window(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Dashboard PnL Org", slug="dashboard-pnl-org")
+            session.add(org)
+            await session.flush()
+
+            now = datetime.now(timezone.utc)
+            day_start = _day_start_for_offset(now, 180)
+            old_snapshot_time = day_start - timedelta(hours=18)
+
+            integration = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="Gate.io Main",
+                kind="cex",
+                exchange_code="gateio",
+                account_ref="main",
+                is_active=True,
+                status="active",
+            )
+            session.add(integration)
+            await session.flush()
+            session.add_all(
+                [
+                    Balance(
+                        organization_id=org.id,
+                        integration_id=integration.id,
+                        service="gateio",
+                        assets=[],
+                        accounts=[],
+                        total_usd=370.0,
+                        actual=True,
+                        updated_at=now,
+                    ),
+                    BalanceHistory(
+                        organization_id=org.id,
+                        integration_id=integration.id,
+                        service="gateio",
+                        assets=[],
+                        accounts=[],
+                        total_usd=365.0,
+                        actual=True,
+                        created_at=old_snapshot_time,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            response = await get_dashboard_summary(
+                include_metrics=True,
+                utc_offset_minutes=180,
+                db=session,
+                organization_id=org.id,
+                _=object(),
+            )
+
+            payload = response.model_dump()
+            self.assertEqual(payload["balance_today_start"], 365.0)
+            self.assertEqual(payload["pnl_today"], 5.0)
 
 
 class IntegrationLifecycleContractTests(unittest.IsolatedAsyncioTestCase):
