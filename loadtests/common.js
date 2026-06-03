@@ -43,7 +43,9 @@ export const cfg = {
   accountsPerOrg: Math.max(1, envInt('ACCOUNTS_PER_ORG', 1000)),
   thinkTimeMs: Math.max(0, envInt('THINK_TIME_MS', 0)),
   requestTimeoutMs: Math.max(100, envInt('REQUEST_TIMEOUT_MS', 30000)),
-  forceRefreshRatio: Math.max(0, Math.min(1, envFloat('FORCE_REFRESH_RATIO', 0.03))),
+  forceRefreshRatio: Math.max(0, Math.min(1, envFloat('FORCE_REFRESH_RATIO', 0))),
+  dashboardMetricsRatio: Math.max(0, Math.min(1, envFloat('DASHBOARD_METRICS_RATIO', 0.25))),
+  dashboardUtcOffsetMinutes: envInt('DASHBOARD_UTC_OFFSET_MINUTES', 180),
   enableMutatingEndpoints: envBool('ENABLE_MUTATING_ENDPOINTS', false),
 };
 
@@ -80,6 +82,16 @@ export function runReadPathSuite() {
   const balancesResp = http.get(balancesUrl, defaultParams('balances_cached', orgId));
   check(balancesResp, {
     'balances/cached status is 200': (r) => r.status === 200,
+  });
+
+  const includeMetrics = Math.random() < cfg.dashboardMetricsRatio;
+  const dashboardUrl = `${cfg.baseUrl}/api/v1/dashboard/summary?include_metrics=${includeMetrics ? 'true' : 'false'}&utc_offset_minutes=${cfg.dashboardUtcOffsetMinutes}`;
+  const dashboardResp = http.get(
+    dashboardUrl,
+    defaultParams(includeMetrics ? 'dashboard_summary_metrics' : 'dashboard_summary', orgId),
+  );
+  check(dashboardResp, {
+    'dashboard/summary status is 200': (r) => r.status === 200,
   });
 
   const txOffset = (__ITER % 20) * 50;
