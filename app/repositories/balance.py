@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Sequence
 
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.exc import IntegrityError
@@ -297,6 +297,56 @@ class BalanceRepository:
             )
         )
         return float(result.scalar_one() or 0.0)
+
+    async def get_portfolio_snapshot_total_for_keys(
+        self,
+        organization_id: int,
+        at: datetime,
+        keys: Sequence[tuple[str, int | str]],
+        *,
+        max_age: timedelta | None = None,
+    ) -> float:
+        """Return point-in-time portfolio total for known active balance keys.
+
+        This is optimized for dashboard PnL: the current portfolio already knows
+        which integration/service keys are active, so use index seeks per key
+        instead of window-scanning the full balance_history table.
+        """
+        total = 0.0
+        seen: set[tuple[str, int | str]] = set()
+        for key_type, raw_value in keys:
+            key = (str(key_type), raw_value)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            predicates = [
+                BalanceHistory.organization_id == organization_id,
+                BalanceHistory.created_at <= at,
+            ]
+            if max_age is not None:
+                predicates.append(BalanceHistory.created_at >= at - max_age)
+
+            if key_type == "integration":
+                predicates.append(BalanceHistory.integration_id == int(raw_value))
+            elif key_type == "service":
+                predicates.extend(
+                    [
+                        BalanceHistory.service == str(raw_value),
+                        BalanceHistory.integration_id.is_(None),
+                    ]
+                )
+            else:
+                continue
+
+            result = await self.session.execute(
+                select(BalanceHistory.total_usd)
+                .where(and_(*predicates))
+                .order_by(desc(BalanceHistory.created_at), desc(BalanceHistory.id))
+                .limit(1)
+            )
+            total += float(result.scalar_one_or_none() or 0.0)
+        return total
 
     async def get_history_count(
         self,
