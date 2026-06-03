@@ -1045,7 +1045,7 @@ class ScreenService:
             try:
                 return await _asyncio.wait_for(
                     self.api_repo.get_dashboard_summary(),
-                    timeout=8,
+                    timeout=12,
                 )
             except Exception:
                 return None
