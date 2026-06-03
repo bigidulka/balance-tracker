@@ -604,19 +604,12 @@ async def _get_dashboard_summary_uncached(
                 now - timedelta(days=30),
             ]
 
-            async def _load_snapshot_values() -> list[float]:
-                values: list[float] = []
-                for point in snapshot_specs:
-                    value = await balance_repo.get_portfolio_snapshot_total_for_keys(
-                        organization_id=organization_id,
-                        at=point,
-                        keys=snapshot_keys,
-                    )
-                    values.append(value)
-                return values
-
             snapshot_values = await asyncio.wait_for(
-                _load_snapshot_values(),
+                balance_repo.get_portfolio_snapshot_totals_for_keys(
+                    organization_id=organization_id,
+                    points=snapshot_specs,
+                    keys=snapshot_keys,
+                ),
                 timeout=1.5,
             )
 

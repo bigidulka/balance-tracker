@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -356,6 +356,116 @@ class BalanceRepository:
             )
             total += float(result.scalar_one_or_none() or 0.0)
         return total
+
+    async def get_portfolio_snapshot_totals_for_keys(
+        self,
+        organization_id: int,
+        points: Sequence[datetime],
+        keys: Sequence[tuple[str, object]],
+        *,
+        max_age: timedelta | None = None,
+    ) -> list[float]:
+        """Return point-in-time portfolio totals for multiple snapshot points."""
+        if not points:
+            return []
+
+        bind = self.session.get_bind()
+        if bind.dialect.name != "postgresql" or max_age is not None:
+            return [
+                await self.get_portfolio_snapshot_total_for_keys(
+                    organization_id=organization_id,
+                    at=point,
+                    keys=keys,
+                    max_age=max_age,
+                )
+                for point in points
+            ]
+
+        normalized_keys: list[tuple[str, int | None]] = []
+        seen: set[tuple[str, int | None]] = set()
+        for key_type, raw_value in keys:
+            if key_type != "service_integration":
+                return [
+                    await self.get_portfolio_snapshot_total_for_keys(
+                        organization_id=organization_id,
+                        at=point,
+                        keys=keys,
+                        max_age=max_age,
+                    )
+                    for point in points
+                ]
+            if not isinstance(raw_value, tuple) or len(raw_value) != 2:
+                continue
+            service, integration_id = raw_value
+            normalized = (
+                str(service),
+                None if integration_id is None else int(integration_id),
+            )
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_keys.append(normalized)
+
+        if not normalized_keys:
+            return [0.0 for _ in points]
+
+        params: dict[str, object] = {"organization_id": organization_id}
+        point_selects: list[str] = []
+        for idx, point in enumerate(points):
+            params[f"point_{idx}"] = point
+            point_selects.append(
+                f"SELECT {idx} AS point_idx, "
+                f"CAST(:point_{idx} AS TIMESTAMP WITH TIME ZONE) AS snapshot_at"
+            )
+
+        key_selects: list[str] = []
+        for idx, (service, integration_id) in enumerate(normalized_keys):
+            params[f"service_{idx}"] = service
+            params[f"integration_{idx}"] = integration_id
+            key_selects.append(
+                f"SELECT {idx} AS key_idx, "
+                f"CAST(:service_{idx} AS VARCHAR) AS service, "
+                f"CAST(:integration_{idx} AS INTEGER) AS integration_id"
+            )
+
+        query = text(
+            f"""
+            WITH points AS (
+                {" UNION ALL ".join(point_selects)}
+            ),
+            active_keys AS (
+                {" UNION ALL ".join(key_selects)}
+            )
+            SELECT
+                points.point_idx,
+                COALESCE(SUM(latest.total_usd), 0.0) AS total_usd
+            FROM points
+            CROSS JOIN active_keys
+            LEFT JOIN LATERAL (
+                SELECT balance_history.total_usd
+                FROM balance_history
+                WHERE balance_history.organization_id = :organization_id
+                  AND balance_history.created_at <= points.snapshot_at
+                  AND balance_history.service = active_keys.service
+                  AND (
+                    (
+                        active_keys.integration_id IS NULL
+                        AND balance_history.integration_id IS NULL
+                    )
+                    OR balance_history.integration_id = active_keys.integration_id
+                  )
+                ORDER BY balance_history.created_at DESC, balance_history.id DESC
+                LIMIT 1
+            ) latest ON TRUE
+            GROUP BY points.point_idx
+            ORDER BY points.point_idx
+            """
+        )
+        result = await self.session.execute(query, params)
+        values = [0.0 for _ in points]
+        for row in result:
+            values[int(row.point_idx)] = float(row.total_usd or 0.0)
+        return values
 
     async def get_portfolio_snapshot_total_near(
         self,
