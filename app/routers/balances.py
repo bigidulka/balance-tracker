@@ -417,6 +417,8 @@ async def get_dashboard_summary(
     dex_total = 0.0
     exchanges_count = 0
     latest_updated_at: datetime | None = None
+    snapshot_keys: list[tuple[str, int | str]] = []
+    snapshot_keys_seen: set[tuple[str, int | str]] = set()
 
     for balance in balances:
         if balance.service not in allowed_services:
@@ -425,6 +427,14 @@ async def get_dashboard_summary(
             continue
         if not settings.is_service_enabled(balance.service):
             continue
+        if balance.integration_id is not None:
+            snapshot_key: tuple[str, int | str] = ("integration", int(balance.integration_id))
+        else:
+            snapshot_key = ("service", str(balance.service))
+        if snapshot_key not in snapshot_keys_seen:
+            snapshot_keys_seen.add(snapshot_key)
+            snapshot_keys.append(snapshot_key)
+
         total_usd += float(balance.total_usd)
         updated_at = balance.updated_at
         if latest_updated_at is None or updated_at > latest_updated_at:
@@ -527,13 +537,20 @@ async def get_dashboard_summary(
             async def _load_snapshot_values() -> list[float]:
                 values: list[float] = []
                 for point, max_age in snapshot_specs:
-                    values.append(
-                        await balance_repo.get_portfolio_snapshot_total_at(
+                    if snapshot_keys:
+                        value = await balance_repo.get_portfolio_snapshot_total_for_keys(
+                            organization_id=organization_id,
+                            at=point,
+                            keys=snapshot_keys,
+                            max_age=max_age,
+                        )
+                    else:
+                        value = await balance_repo.get_portfolio_snapshot_total_at(
                             organization_id=organization_id,
                             at=point,
                             max_age=max_age,
                         )
-                    )
+                    values.append(value)
                 return values
 
             snapshot_values = await asyncio.wait_for(
