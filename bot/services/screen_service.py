@@ -1033,17 +1033,31 @@ class ScreenService:
         return latest
 
     async def _render_main(self, *, user_id: int, rev: int) -> RenderedScreen:
-        # Fire menu_context + dashboard_summary in parallel
         import asyncio as _asyncio
-        menu_coro = self.menu_context()
-        summary_coro = self.api_repo.get_dashboard_summary()
+
+        async def _safe_menu_context() -> tuple[bool, str, dict[str, Any], dict[str, Any]]:
+            try:
+                return await _asyncio.wait_for(self.menu_context(), timeout=8)
+            except Exception:
+                return True, "-", {"can_refresh": True}, {}
+
+        async def _safe_dashboard_summary() -> dict[str, Any] | None:
+            try:
+                return await _asyncio.wait_for(
+                    self.api_repo.get_dashboard_summary(),
+                    timeout=8,
+                )
+            except Exception:
+                return None
+
+        menu_coro = _safe_menu_context()
+        summary_coro = _safe_dashboard_summary()
         try:
             (allow_dex, plan_label, capabilities, throttling), summary = await _asyncio.gather(
                 menu_coro, summary_coro
             )
         except Exception:
-            # Fallback: sequential if parallel fails
-            allow_dex, plan_label, capabilities, throttling = await self.menu_context()
+            allow_dex, plan_label, capabilities, throttling = True, "-", {"can_refresh": True}, {}
             summary = None
 
         can_refresh = self._refresh_allowed(capabilities)
@@ -1061,7 +1075,7 @@ class ScreenService:
         if display_currency != "USD" and summary:
             try:
                 from bot.services.fx_rates import fetch_fx_rates, convert_usd, format_fiat as fx_format
-                rates = await fetch_fx_rates()
+                rates = await _asyncio.wait_for(fetch_fx_rates(), timeout=2)
                 total_usd = float(summary.get("total_usd") or 0.0)
                 converted_total = convert_usd(total_usd, display_currency, rates)
                 currency_label = fx_format(converted_total, display_currency)
@@ -1071,7 +1085,9 @@ class ScreenService:
 
         try:
             if summary is None:
-                summary = await self.api_repo.get_dashboard_summary()
+                summary = await _safe_dashboard_summary()
+            if summary is None:
+                raise TimeoutError("dashboard summary unavailable")
             if settings.no_backend_ui_mode:
                 summary["plan"] = summary.get("plan") or {
                     "name": "UI Preview",
