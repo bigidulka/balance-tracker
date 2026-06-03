@@ -521,7 +521,7 @@ async def get_dashboard_summary(
                 (today_start, timedelta(hours=12)),
                 (now - timedelta(hours=24), timedelta(hours=12)),
                 (now - timedelta(days=7), timedelta(hours=12)),
-                (now - timedelta(days=30), timedelta(hours=24)),
+                (now - timedelta(days=30), timedelta(days=3)),
             ]
 
             async def _load_snapshot_values() -> list[float]:
