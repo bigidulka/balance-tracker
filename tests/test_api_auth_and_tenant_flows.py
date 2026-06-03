@@ -3,11 +3,21 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from app.core.dependencies import get_current_organization_id, get_identity_context
+from app.core.dependencies import (
+    clear_identity_context_cache,
+    get_current_organization_id,
+    get_identity_context,
+)
 from app.core.request_context import RequestContext
 
 
 class APITokenAndTenantFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await clear_identity_context_cache()
+
+    async def asyncTearDown(self):
+        await clear_identity_context_cache()
+
     async def test_identity_context_requires_bearer_authorization(self):
         with self.assertRaises(HTTPException) as exc:
             await get_identity_context(authorization="", db=object())
@@ -62,6 +72,37 @@ class APITokenAndTenantFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.organization.id, 777)
         self.assertEqual(resolve.await_args.kwargs.get("organization_override"), 777)
+
+    async def test_identity_context_is_cached_for_same_token_and_organization(self):
+        identity = type(
+            "Identity",
+            (),
+            {
+                "user": type("UserObj", (), {"id": 1})(),
+                "organization": type("OrgObj", (), {"id": 123})(),
+                "membership": type("MembershipObj", (), {"role": "viewer"})(),
+            },
+        )()
+
+        with patch("app.core.dependencies.AuthService.resolve_identity", new_callable=AsyncMock) as resolve:
+            resolve.return_value = identity
+
+            first = await get_identity_context(
+                authorization="Bearer token",
+                x_organization_id=None,
+                organization_id=123,
+                db=object(),
+            )
+            second = await get_identity_context(
+                authorization="Bearer token",
+                x_organization_id=None,
+                organization_id=123,
+                db=object(),
+            )
+
+        self.assertEqual(first.organization.id, 123)
+        self.assertEqual(second.organization.id, 123)
+        self.assertEqual(resolve.await_count, 1)
 
     async def test_get_current_organization_id_sets_request_context(self):
         request = type("Req", (), {})()

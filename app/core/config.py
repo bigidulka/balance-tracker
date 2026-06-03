@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     enable_shared_cache_l2: bool = Field(default=False)
     api_hot_cache_ttl_seconds: float = Field(default=2.0)
     api_hot_cache_max_entries: int = Field(default=512)
+    auth_context_cache_ttl_seconds: float = Field(default=2.0)
+    auth_context_cache_max_entries: int = Field(default=1024)
     exchange_parallelism: int = Field(default=8)
     job_parallelism: int = Field(default=2)
     background_refresh_poll_interval_seconds: float = Field(default=5.0)
