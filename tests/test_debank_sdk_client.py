@@ -54,7 +54,7 @@ class DeBankSdkClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(balance.total_usd, 50)
         self.assertEqual(balance.accounts[0].assets[0].coin, "USDC_base")
 
-    async def test_fetch_wallet_balance_rejects_total_assets_mismatch(self):
+    async def test_fetch_wallet_balance_allows_portfolio_total_above_token_assets(self):
         client = DeBankSdkClient()
         with patch.object(
             client,
@@ -74,6 +74,8 @@ class DeBankSdkClientTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         ):
-            with self.assertRaisesRegex(ValueError, "total/assets mismatch"):
-                await client.fetch_wallet_balance("0x463452C356322D463B84891eBDa33DAED274cB40")
+            balance = await client.fetch_wallet_balance("0x463452C356322D463B84891eBDa33DAED274cB40")
+
+        self.assertEqual(balance.total_usd, 1000000)
+        self.assertEqual(balance.assets[0].value_usd, 50)
 

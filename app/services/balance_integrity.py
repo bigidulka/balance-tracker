@@ -69,6 +69,11 @@ def _balance_snapshot(balance: ServiceBalanceSchema) -> BalanceIntegritySnapshot
     )
 
 
+def _allows_portfolio_total_mismatch(service: str) -> bool:
+    normalized = (service or "").strip().lower()
+    return normalized.startswith(("debank_sdk_", "evm_"))
+
+
 def validate_balance_shape(balance: ServiceBalanceSchema) -> None:
     if not settings.balance_integrity_enabled:
         return
@@ -78,13 +83,16 @@ def validate_balance_shape(balance: ServiceBalanceSchema) -> None:
     has_assets = bool(balance.assets)
     has_accounts = bool(balance.accounts)
     reference_sum = snapshot.assets_sum if has_assets else snapshot.accounts_sum
+    allow_portfolio_mismatch = _allows_portfolio_total_mismatch(balance.service)
 
     if total_usd > 0 and not has_assets and not has_accounts:
-        raise BalanceIntegrityError(
-            f"Empty positive balance payload for {balance.service}: total_usd={total_usd:.2f}"
-        )
+        if not allow_portfolio_mismatch:
+            raise BalanceIntegrityError(
+                f"Empty positive balance payload for {balance.service}: total_usd={total_usd:.2f}"
+            )
+        return
 
-    if has_assets or has_accounts:
+    if (has_assets or has_accounts) and not allow_portfolio_mismatch:
         reference_name = "assets" if has_assets else "accounts"
         reference_value = snapshot.assets_sum if has_assets else snapshot.accounts_sum
         mismatch = abs(total_usd - reference_value)

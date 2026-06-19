@@ -116,7 +116,7 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_balance_shape_rejects_total_assets_mismatch(self):
         balance = ServiceBalanceSchema(
-            service="evm_0xabc",
+            service="binance",
             assets=[AssetSchema(coin="USDC_base", amount=10, value_usd=10)],
             accounts=[],
             total_usd=1000000,
@@ -126,6 +126,30 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BalanceIntegrityError, "total/assets mismatch"):
             validate_balance_shape(balance)
+
+    async def test_wallet_shape_allows_portfolio_total_assets_mismatch(self):
+        balance = ServiceBalanceSchema(
+            service="evm_0xabc",
+            assets=[AssetSchema(coin="USDC_base", amount=10, value_usd=10)],
+            accounts=[],
+            total_usd=6653.64,
+            updated_at=datetime.now(timezone.utc),
+            actual=True,
+        )
+
+        validate_balance_shape(balance)
+
+    async def test_wallet_shape_allows_empty_positive_portfolio_total(self):
+        balance = ServiceBalanceSchema(
+            service="debank_sdk_0xabc",
+            assets=[],
+            accounts=[],
+            total_usd=6653.64,
+            updated_at=datetime.now(timezone.utc),
+            actual=True,
+        )
+
+        validate_balance_shape(balance)
 
     async def test_balance_service_rejects_outlier_and_keeps_previous(self):
         async with self.session_maker() as session:
@@ -241,7 +265,7 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
         async with self.session_maker() as session:
             service = BalanceService(session=session, organization_id=1)
             empty_positive = ServiceBalanceSchema(
-                service="evm_0xabc",
+                service="binance",
                 assets=[],
                 accounts=[],
                 total_usd=25,
@@ -250,7 +274,7 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
             )
 
             with self.assertRaisesRegex(BalanceIntegrityError, "Empty positive"):
-                await service.fetch_and_save_balance("evm_0xabc", empty_positive)
+                await service.fetch_and_save_balance("binance", empty_positive)
 
     async def test_sync_job_persist_rejects_invalid_balance_and_marks_unhealthy(self):
         async with self.session_maker() as session:
@@ -261,7 +285,7 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "balance": {
                             "integration_id": 10,
-                            "service": "evm_0xabc",
+                            "service": "binance",
                             "assets": [
                                 {"coin": "USDC", "amount": 10, "value_usd": 10}
                             ],
@@ -273,12 +297,12 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             latest = await BalanceRepository(session).get_latest_balance(
-                "evm_0xabc",
+                "binance",
                 organization_id=1,
                 integration_id=10,
             )
             status = await ServiceStatusRepository(session).get_status(
-                "evm_0xabc",
+                "binance",
                 organization_id=1,
             )
 
