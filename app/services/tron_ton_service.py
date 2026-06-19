@@ -21,6 +21,7 @@ TON / jettons:
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ import aiohttp
 
 from app.core.config import get_settings
 from app.core.http import request_proxy_kwargs, session_kwargs
-from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema
+from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema, TransactionSchema
 from app.services.price_enrichment import TokenPrice, enrich_prices, get_native_price
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,10 @@ _TRON_DYNAMIC: dict[str, tuple[str, int]] = {
 }
 
 _TRONGRID_ACCOUNT_URL = "https://api.trongrid.io/v1/accounts/{address}"
+_TRONGRID_TRANSACTIONS_URL = "https://api.trongrid.io/v1/accounts/{address}/transactions"
+_TRONGRID_TRC20_TRANSACTIONS_URL = "https://api.trongrid.io/v1/accounts/{address}/transactions/trc20"
 _TONAPI_ACCOUNT_URL = "https://tonapi.io/v2/accounts/{address}"
+_TONAPI_EVENTS_URL = "https://tonapi.io/v2/accounts/{address}/events"
 _TONAPI_JETTONS_URL = "https://tonapi.io/v2/accounts/{address}/jettons"
 _TONAPI_RATES_URL = "https://tonapi.io/v2/rates"
 
@@ -459,6 +463,299 @@ class TronTonService:
             )
 
         return self._to_service_balance(address, assets)
+
+    # ------------------------------------------------------------------
+    # Transactions
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _trx_address_to_hex(address: str) -> str:
+        alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        value = 0
+        for char in address:
+            value = value * 58 + alphabet.index(char)
+        raw = value.to_bytes(25, "big")
+        payload, checksum = raw[:-4], raw[-4:]
+        expected = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+        if checksum != expected:
+            raise ValueError("invalid TRON address checksum")
+        return payload.hex()
+
+    @staticmethod
+    def _ts_from_millis(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    @staticmethod
+    def _ton_account_address(value: Any) -> str:
+        if isinstance(value, dict):
+            return str(value.get("address") or "")
+        return str(value or "")
+
+    async def fetch_tron_transactions(
+        self,
+        address: str,
+        *,
+        service: str | None = None,
+        integration_id: int | None = None,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionSchema]:
+        target = (address or "").strip()
+        if not self.is_tron_address(target):
+            raise ValueError(f"Address '{target}' is not a recognised TRON address")
+        service_key = service or self.service_name_for(target)
+        page_limit = max(1, min(int(limit or 20), 50))
+        session = await self._get_session()
+        target_hex = self._trx_address_to_hex(target).lower()
+        transactions: list[TransactionSchema] = []
+
+        native_url = _TRONGRID_TRANSACTIONS_URL.format(address=target)
+        try:
+            async with session.get(
+                native_url,
+                params={
+                    "only_confirmed": "true",
+                    "limit": page_limit,
+                    "order_by": "block_timestamp,desc",
+                },
+                headers=self._default_headers(),
+                **request_proxy_kwargs(),
+            ) as resp:
+                resp.raise_for_status()
+                native_data: dict[str, Any] = await resp.json()
+        except Exception as exc:
+            raise ValueError(f"TronGrid transactions request failed for {target}: {exc}") from exc
+
+        for item in native_data.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            txid = str(item.get("txID") or "").strip()
+            contract = ((item.get("raw_data") or {}).get("contract") or [{}])[0]
+            if contract.get("type") != "TransferContract":
+                continue
+            value = ((contract.get("parameter") or {}).get("value") or {})
+            owner_hex = str(value.get("owner_address") or "").lower()
+            to_hex = str(value.get("to_address") or "").lower()
+            if not txid or target_hex not in {owner_hex, to_hex}:
+                continue
+            try:
+                amount = abs(float(value.get("amount") or 0.0)) / 1_000_000
+            except (TypeError, ValueError):
+                continue
+            if amount <= 0:
+                continue
+            tx_timestamp = self._ts_from_millis(item.get("block_timestamp"))
+            if since is not None and tx_timestamp is not None and tx_timestamp < since:
+                continue
+            ret = (item.get("ret") or [{}])[0]
+            status = "ok" if str(ret.get("contractRet") or "").upper() == "SUCCESS" else "failed"
+            transactions.append(
+                TransactionSchema(
+                    integration_id=integration_id,
+                    tx_id=f"{service_key}:trx:{txid}",
+                    service=service_key,
+                    tx_type="deposit" if to_hex == target_hex else "withdrawal",
+                    currency="TRX",
+                    amount=amount,
+                    fee=0.0,
+                    fee_currency=None,
+                    network="tron",
+                    address=target,
+                    address_from=owner_hex or None,
+                    address_to=to_hex or None,
+                    status=status,
+                    txid=txid,
+                    tx_timestamp=tx_timestamp,
+                    notified=False,
+                )
+            )
+
+        trc20_url = _TRONGRID_TRC20_TRANSACTIONS_URL.format(address=target)
+        try:
+            async with session.get(
+                trc20_url,
+                params={
+                    "only_confirmed": "true",
+                    "limit": page_limit,
+                    "order_by": "block_timestamp,desc",
+                },
+                headers=self._default_headers(),
+                **request_proxy_kwargs(),
+            ) as resp:
+                resp.raise_for_status()
+                trc20_data: dict[str, Any] = await resp.json()
+        except Exception as exc:
+            logger.debug("TronGrid TRC20 transactions request failed for %s: %s", target, exc)
+            trc20_data = {}
+
+        for item in trc20_data.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            txid = str(item.get("transaction_id") or "").strip()
+            from_addr = str(item.get("from") or "")
+            to_addr = str(item.get("to") or "")
+            token_info = item.get("token_info") if isinstance(item.get("token_info"), dict) else {}
+            contract = str(token_info.get("address") or item.get("token_address") or "")
+            decimals = int(token_info.get("decimals") or 6)
+            symbol = str(token_info.get("symbol") or "TRC20")
+            try:
+                amount = abs(float(item.get("value") or 0.0)) / (10**decimals)
+            except (TypeError, ValueError):
+                continue
+            if not txid or amount <= 0:
+                continue
+            tx_timestamp = self._ts_from_millis(item.get("block_timestamp"))
+            if since is not None and tx_timestamp is not None and tx_timestamp < since:
+                continue
+            tx_type = "deposit" if to_addr.lower() == target.lower() else "withdrawal"
+            transactions.append(
+                TransactionSchema(
+                    integration_id=integration_id,
+                    tx_id=f"{service_key}:trc20:{txid}:{contract}",
+                    service=service_key,
+                    tx_type=tx_type,
+                    currency=symbol,
+                    amount=amount,
+                    fee=0.0,
+                    fee_currency=None,
+                    network="tron",
+                    address=target,
+                    address_from=from_addr or None,
+                    address_to=to_addr or None,
+                    status="ok",
+                    txid=txid,
+                    tx_timestamp=tx_timestamp,
+                    notified=False,
+                )
+            )
+        return transactions
+
+    async def fetch_ton_transactions(
+        self,
+        address: str,
+        *,
+        service: str | None = None,
+        integration_id: int | None = None,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionSchema]:
+        target = (address or "").strip()
+        if not self.is_ton_address(target):
+            raise ValueError(f"Address '{target}' is not a recognised TON address")
+        service_key = service or self.service_name_for(target)
+        page_limit = max(1, min(int(limit or 20), 50))
+        session = await self._get_session()
+        url = _TONAPI_EVENTS_URL.format(address=target)
+        try:
+            async with session.get(
+                url,
+                params={"limit": page_limit},
+                headers=self._default_headers(),
+                **request_proxy_kwargs(),
+            ) as resp:
+                resp.raise_for_status()
+                data: dict[str, Any] = await resp.json()
+        except Exception as exc:
+            raise ValueError(f"tonapi events request failed for {target}: {exc}") from exc
+
+        transactions: list[TransactionSchema] = []
+        target_lower = target.lower()
+        for event in data.get("events") or []:
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("event_id") or "").strip()
+            timestamp = event.get("timestamp")
+            tx_timestamp = None
+            if timestamp:
+                try:
+                    tx_timestamp = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+                except (TypeError, ValueError, OSError):
+                    tx_timestamp = None
+            if since is not None and tx_timestamp is not None and tx_timestamp < since:
+                continue
+            status = "pending" if bool(event.get("in_progress")) else "ok"
+            for index, action in enumerate(event.get("actions") or []):
+                if not isinstance(action, dict):
+                    continue
+                action_type = str(action.get("type") or "")
+                payload = action.get(action_type) if isinstance(action.get(action_type), dict) else {}
+                if action_type == "TonTransfer":
+                    sender = self._ton_account_address(payload.get("sender"))
+                    recipient = self._ton_account_address(payload.get("recipient"))
+                    try:
+                        amount = abs(float(payload.get("amount") or 0.0)) / 1_000_000_000
+                    except (TypeError, ValueError):
+                        continue
+                    symbol = "TON"
+                elif action_type == "JettonTransfer":
+                    sender = self._ton_account_address(payload.get("sender"))
+                    recipient = self._ton_account_address(payload.get("recipient"))
+                    jetton = payload.get("jetton") if isinstance(payload.get("jetton"), dict) else {}
+                    symbol = str(jetton.get("symbol") or "JETTON")
+                    decimals = int(jetton.get("decimals") or 9)
+                    try:
+                        amount = abs(float(payload.get("amount") or 0.0)) / (10**decimals)
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    continue
+                if amount <= 0:
+                    continue
+                tx_type = "deposit" if recipient.lower() == target_lower else "withdrawal"
+                transactions.append(
+                    TransactionSchema(
+                        integration_id=integration_id,
+                        tx_id=f"{service_key}:ton:{event_id}:{index}",
+                        service=service_key,
+                        tx_type=tx_type,
+                        currency=symbol,
+                        amount=amount,
+                        fee=0.0,
+                        fee_currency=None,
+                        network="ton",
+                        address=target,
+                        address_from=sender or None,
+                        address_to=recipient or None,
+                        status=status,
+                        txid=event_id,
+                        tx_timestamp=tx_timestamp,
+                        notified=False,
+                    )
+                )
+        return transactions
+
+    async def fetch_wallet_transactions(
+        self,
+        address: str,
+        *,
+        service: str | None = None,
+        integration_id: int | None = None,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionSchema]:
+        target = (address or "").strip()
+        if self.is_tron_address(target):
+            return await self.fetch_tron_transactions(
+                target,
+                service=service,
+                integration_id=integration_id,
+                since=since,
+                limit=limit,
+            )
+        if self.is_ton_address(target):
+            return await self.fetch_ton_transactions(
+                target,
+                service=service,
+                integration_id=integration_id,
+                since=since,
+                limit=limit,
+            )
+        raise ValueError(f"Address '{target}' is not a recognised TRON or TON address")
 
     # ------------------------------------------------------------------
     # Public entry point

@@ -76,6 +76,58 @@ class DexTransactionRefreshTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[0].service, service_key)
             self.assertEqual(rows[0].integration_id, integration.id)
 
+    async def test_refresh_routes_sui_tron_ton_wallet_transactions(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Org", slug="org")
+            session.add(org)
+            await session.flush()
+            sui_wallet = "0x" + "3" * 64
+            tron_wallet = "T" + "A" * 33
+            ton_wallet = "UQ" + "A" * 46
+            targets = [
+                ("sui", "sui", sui_wallet, f"sui_{sui_wallet.lower()}"),
+                ("tron_ton", "tron", tron_wallet, f"tron_{tron_wallet.lower()}"),
+                ("tron_ton", "ton", ton_wallet, f"ton_{ton_wallet.lower()}"),
+            ]
+            for provider, chain, wallet, service_key in targets:
+                session.add(
+                    Integration(
+                        organization_id=org.id,
+                        provider=provider,
+                        name=f"{chain} wallet",
+                        kind="dex",
+                        wallet_address=wallet,
+                        chain=chain,
+                        is_active=True,
+                    )
+                )
+                session.add(
+                    ServiceStatus(
+                        organization_id=org.id,
+                        service=service_key,
+                        is_healthy=True,
+                    )
+                )
+            await session.commit()
+
+            service = TransactionService(session, organization_id=org.id)
+            service.entitlements.ensure_refresh_interval_for_organization = AsyncMock(return_value=None)
+
+            with patch(
+                "app.services.transaction_service.sui_service.fetch_wallet_transactions",
+                AsyncMock(return_value=[]),
+            ) as sui_mock, patch(
+                "app.services.transaction_service.tron_ton_service.fetch_wallet_transactions",
+                AsyncMock(return_value=[]),
+            ) as tron_ton_mock:
+                result = await service.refresh_transactions(since_hours=1)
+
+            self.assertEqual(result.status, "ok")
+            self.assertEqual(result.failed_services, [])
+            self.assertEqual(sui_mock.await_count, 1)
+            self.assertEqual(tron_ton_mock.await_count, 2)
+            self.assertEqual(set(result.services_checked), {item[3] for item in targets})
+
     async def test_refresh_skips_unhealthy_dex_wallet_transactions(self):
         async with self.session_maker() as session:
             org = Organization(name="Org", slug="org")

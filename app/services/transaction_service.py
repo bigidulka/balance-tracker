@@ -18,6 +18,8 @@ from app.services.entitlements_service import EntitlementsService
 from app.services.debank_sdk_client import debank_sdk_client
 from app.services.integration_keys import service_key_for_integration
 from app.services.integration_service import IntegrationService
+from app.services.sui_service import sui_service
+from app.services.tron_ton_service import tron_ton_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -40,7 +42,7 @@ SUPPORTED_CEX_TRANSACTION_EXCHANGES = {
     "poloniex",
     "xt",
 }
-SUPPORTED_DEX_TRANSACTION_SERVICE_PREFIXES = ("evm_", "sol_")
+SUPPORTED_DEX_TRANSACTION_SERVICE_PREFIXES = ("evm_", "sol_", "sui_", "tron_", "ton_")
 
 
 class TransactionService:
@@ -114,6 +116,37 @@ class TransactionService:
                 }
             )
         return targets
+
+    async def _fetch_dex_transactions(
+        self,
+        *,
+        wallet_address: str,
+        service_key: str,
+        integration_id: int | None,
+        since: datetime,
+    ) -> list[TransactionSchema]:
+        kwargs = {
+            "service": service_key,
+            "integration_id": integration_id,
+            "since": since,
+            "limit": 20,
+        }
+        if service_key.startswith(("evm_", "sol_")):
+            return await debank_sdk_client.fetch_wallet_transactions(
+                wallet_address,
+                **kwargs,
+            )
+        if service_key.startswith("sui_"):
+            return await sui_service.fetch_wallet_transactions(
+                wallet_address,
+                **kwargs,
+            )
+        if service_key.startswith(("tron_", "ton_")):
+            return await tron_ton_service.fetch_wallet_transactions(
+                wallet_address,
+                **kwargs,
+            )
+        return []
 
     async def _load_cex_config_override(self, integration_id: int) -> dict[str, Any] | None:
         secrets = await self.integration_service.get_integration_secrets(
@@ -316,12 +349,11 @@ class TransactionService:
                     if "result" in target:
                         result = target["result"]
                     elif target.get("kind") == "dex":
-                        result = await debank_sdk_client.fetch_wallet_transactions(
-                            str(target["wallet_address"]),
-                            service=service_key,
+                        result = await self._fetch_dex_transactions(
+                            wallet_address=str(target["wallet_address"]),
+                            service_key=service_key,
                             integration_id=int(integration_id) if integration_id is not None else None,
                             since=since,
-                            limit=20,
                         )
                     else:
                         config_override = await self._load_cex_config_override(int(integration_id))

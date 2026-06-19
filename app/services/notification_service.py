@@ -34,7 +34,7 @@ SUPPORTED_CEX_TRANSACTION_SOURCES = {
     "poloniex",
     "xt",
 }
-SUPPORTED_DEX_TRANSACTION_SOURCE_PREFIXES = ("evm_", "sol_")
+SUPPORTED_DEX_TRANSACTION_SOURCE_PREFIXES = ("evm_", "sol_", "sui_", "tron_", "ton_")
 
 
 def _is_supported_transaction_source(source: str) -> bool:

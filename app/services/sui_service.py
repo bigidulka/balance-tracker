@@ -19,6 +19,7 @@ Balance strategy
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ import aiohttp
 
 from app.core.config import get_settings
 from app.core.http import request_proxy_kwargs, session_kwargs
-from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema
+from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema, TransactionSchema
 from app.services.price_enrichment import TokenPrice, enrich_prices
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,137 @@ class SuiService:
                 "(expected 0x followed by 64 hex characters)"
             )
         return await self.fetch_sui_balance(target)
+
+    async def _coin_metadata(self, coin_type: str) -> tuple[str, int]:
+        if coin_type == _SUI_COIN_TYPE:
+            return "SUI", 9
+        if coin_type in _STABLE_COINS:
+            symbol, decimals, _ = _STABLE_COINS[coin_type]
+            return symbol, decimals
+        try:
+            meta = await self._rpc_call("suix_getCoinMetadata", [coin_type])
+            if isinstance(meta, dict):
+                return str(meta.get("symbol") or self._extract_symbol(coin_type)), int(
+                    meta.get("decimals") or 9
+                )
+        except Exception as exc:
+            logger.debug("SUI coin metadata failed for %s: %s", coin_type, exc)
+        return self._extract_symbol(coin_type), 9
+
+    @staticmethod
+    def _transaction_status(item: dict[str, Any]) -> str:
+        effects = item.get("effects") if isinstance(item.get("effects"), dict) else {}
+        status = effects.get("status") if isinstance(effects.get("status"), dict) else {}
+        raw = str(status.get("status") or "").lower()
+        if raw == "success":
+            return "ok"
+        if raw == "failure":
+            return "failed"
+        return "pending"
+
+    async def fetch_wallet_transactions(
+        self,
+        address: str,
+        *,
+        service: str | None = None,
+        integration_id: int | None = None,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionSchema]:
+        target = (address or "").strip()
+        if not target:
+            raise ValueError("SUI wallet address is required")
+        if not self.is_sui_address(target):
+            raise ValueError(
+                f"Address '{target}' is not a recognised SUI address "
+                "(expected 0x followed by 64 hex characters)"
+            )
+
+        page_limit = max(1, min(int(limit or 20), 50))
+        result = await self._rpc_call(
+            "suix_queryTransactionBlocks",
+            [
+                {
+                    "filter": {"FromOrToAddress": {"addr": target}},
+                    "options": {
+                        "showBalanceChanges": True,
+                        "showEffects": True,
+                        "showInput": True,
+                    },
+                },
+                None,
+                page_limit,
+                True,
+            ],
+        )
+        rows = result.get("data") if isinstance(result, dict) else []
+        service_key = service or self.service_name_for(target)
+        target_lower = target.lower()
+        transactions: list[TransactionSchema] = []
+        metadata_cache: dict[str, tuple[str, int]] = {}
+
+        for item in rows or []:
+            if not isinstance(item, dict):
+                continue
+            digest = str(item.get("digest") or "").strip()
+            if not digest:
+                continue
+            timestamp_ms = item.get("timestampMs")
+            tx_timestamp = None
+            if timestamp_ms:
+                try:
+                    tx_timestamp = datetime.fromtimestamp(
+                        float(timestamp_ms) / 1000,
+                        tz=timezone.utc,
+                    )
+                except (TypeError, ValueError, OSError):
+                    tx_timestamp = None
+            if since is not None and tx_timestamp is not None and tx_timestamp < since:
+                continue
+
+            changes = item.get("balanceChanges") or []
+            for change in changes:
+                if not isinstance(change, dict):
+                    continue
+                owner = change.get("owner") if isinstance(change.get("owner"), dict) else {}
+                owner_addr = str(owner.get("AddressOwner") or "").lower()
+                if owner_addr != target_lower:
+                    continue
+                coin_type = str(change.get("coinType") or "")
+                if not coin_type:
+                    continue
+                try:
+                    raw_delta = int(change.get("amount") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if raw_delta == 0:
+                    continue
+                if coin_type not in metadata_cache:
+                    metadata_cache[coin_type] = await self._coin_metadata(coin_type)
+                symbol, decimals = metadata_cache[coin_type]
+                amount = abs(raw_delta) / (10**decimals)
+                if amount <= 0:
+                    continue
+                coin_hash = hashlib.sha1(coin_type.encode("utf-8")).hexdigest()[:12]
+                transactions.append(
+                    TransactionSchema(
+                        integration_id=integration_id,
+                        tx_id=f"{service_key}:{digest}:{coin_hash}",
+                        service=service_key,
+                        tx_type="deposit" if raw_delta > 0 else "withdrawal",
+                        currency=symbol,
+                        amount=amount,
+                        fee=0.0,
+                        fee_currency=None,
+                        network="sui",
+                        address=target,
+                        status=self._transaction_status(item),
+                        txid=digest,
+                        tx_timestamp=tx_timestamp,
+                        notified=False,
+                    )
+                )
+        return transactions
 
     async def close(self) -> None:
         if self._session and not self._session.closed:
