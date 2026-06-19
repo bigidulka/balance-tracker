@@ -128,6 +128,7 @@ class BalanceRepository:
                 )
 
             if has_changed:
+                now = datetime.now(timezone.utc)
                 history = BalanceHistory(
                     organization_id=organization_id,
                     integration_id=integration_id,
@@ -136,6 +137,7 @@ class BalanceRepository:
                     accounts=accounts_data,
                     total_usd=total_usd,
                     actual=actual,
+                    created_at=now,
                 )
                 self.session.add(history)
 
@@ -143,7 +145,7 @@ class BalanceRepository:
                 existing.accounts = accounts_data
                 existing.total_usd = total_usd
                 existing.actual = actual
-                existing.updated_at = datetime.now(timezone.utc)
+                existing.updated_at = now
                 await self.session.commit()
                 return existing
 
@@ -222,9 +224,9 @@ class BalanceRepository:
             query = query.where(BalanceHistory.created_at <= end_date)
 
         if order == "asc":
-            query = query.order_by(BalanceHistory.created_at.asc())
+            query = query.order_by(BalanceHistory.created_at.asc(), BalanceHistory.id.asc())
         else:
-            query = query.order_by(desc(BalanceHistory.created_at))
+            query = query.order_by(desc(BalanceHistory.created_at), desc(BalanceHistory.id))
         query = query.limit(limit)
 
         result = await self.session.execute(query)

@@ -9,6 +9,7 @@ import aiohttp
 from app.core.config import get_settings
 from app.core.http import request_proxy_kwargs, session_kwargs
 from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema
+from app.services.balance_integrity import validate_balance_shape
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -91,7 +92,7 @@ class DeBankSdkClient:
             assets=assets,
             total_usd=total_usd,
         )
-        return ServiceBalanceSchema(
+        balance = ServiceBalanceSchema(
             service=f"debank_sdk_{wallet_address[:8].lower()}",
             accounts=[account] if assets else [],
             assets=assets,
@@ -104,6 +105,8 @@ class DeBankSdkClient:
             else datetime.now(timezone.utc),
             actual=True,
         )
+        validate_balance_shape(balance)
+        return balance
 
     async def healthcheck(self) -> dict[str, Any]:
         return await self._request_json("/health")

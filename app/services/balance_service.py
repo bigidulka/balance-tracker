@@ -17,6 +17,10 @@ from app.schemas.balance import (
     PortfolioResponse,
     ServiceBalanceSchema,
 )
+from app.services.balance_integrity import (
+    BalanceIntegrityError,
+    validate_balance_for_persistence,
+)
 from app.services.ccxt_manager import ccxt_manager
 from app.services.okx_wallet import okx_wallet_service, OKXWalletService
 from app.services.tron_ton_service import TronTonService, tron_ton_service
@@ -381,6 +385,13 @@ class BalanceService:
         balance: ServiceBalanceSchema,
         integration_id: int | None = None,
     ) -> ServiceBalanceSchema:
+        await validate_balance_for_persistence(
+            self.balance_repo,
+            organization_id=self.organization_id,
+            service=service,
+            balance=balance,
+            integration_id=integration_id,
+        )
         persisted = await self.balance_repo.save_balance(
             service=service,
             assets=balance.assets,
@@ -549,11 +560,22 @@ class BalanceService:
                     if fallback and cache_key not in stale_revalidate_services:
                         all_balances_by_service[cache_key] = fallback
                 elif result is not None:
-                    saved = await self.fetch_and_save_balance(
-                        service,
-                        result,
-                        integration_id=integration_id,
-                    )
+                    try:
+                        saved = await self.fetch_and_save_balance(
+                            service,
+                            result,
+                            integration_id=integration_id,
+                        )
+                    except BalanceIntegrityError as exc:
+                        logger.warning(f"Rejected invalid balance payload for {service}: {exc}")
+                        fallback = await self.handle_fetch_error(
+                            service,
+                            exc,
+                            integration_id=integration_id,
+                        )
+                        if fallback and cache_key not in stale_revalidate_services:
+                            all_balances_by_service[cache_key] = fallback
+                        continue
                     all_balances_by_service[cache_key] = saved
 
         all_balances = list(all_balances_by_service.values())
@@ -667,9 +689,17 @@ class BalanceService:
                         failed.append(service)
                         continue
 
-                    await self.fetch_and_save_balance(
-                        service, result, integration_id=integration_id
-                    )
+                    try:
+                        await self.fetch_and_save_balance(
+                            service, result, integration_id=integration_id
+                        )
+                    except BalanceIntegrityError as exc:
+                        logger.warning(f"Rejected invalid balance payload for {service}: {exc}")
+                        await self.handle_fetch_error(
+                            service, exc, integration_id=integration_id
+                        )
+                        failed.append(service)
+                        continue
                     updated.append(service)
 
         if failed:

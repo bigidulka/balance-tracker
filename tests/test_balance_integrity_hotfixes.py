@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
-from app.repositories.balance import BalanceRepository
-from app.schemas.balance import AccountBalanceSchema, AssetSchema
+from app.repositories.balance import BalanceRepository, ServiceStatusRepository
+from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
+from app.services.balance_integrity import BalanceIntegrityError, validate_balance_shape
 from app.services.balance_service import BalanceService
+from app.services.sync_job_service import SyncJobService
 
 
 class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
@@ -111,3 +113,176 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(fallback)
         self.assertEqual(fallback.total_usd, 0)
         self.assertFalse(fallback.actual)
+
+    async def test_balance_shape_rejects_total_assets_mismatch(self):
+        balance = ServiceBalanceSchema(
+            service="evm_0xabc",
+            assets=[AssetSchema(coin="USDC_base", amount=10, value_usd=10)],
+            accounts=[],
+            total_usd=1000000,
+            updated_at=datetime.now(timezone.utc),
+            actual=True,
+        )
+
+        with self.assertRaisesRegex(BalanceIntegrityError, "total/assets mismatch"):
+            validate_balance_shape(balance)
+
+    async def test_balance_service_rejects_outlier_and_keeps_previous(self):
+        async with self.session_maker() as session:
+            repo = BalanceRepository(session)
+            await repo.save_balance(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=1000, value_usd=1000)],
+                total_usd=1000,
+                actual=True,
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=1000, value_usd=1000)],
+                        total_usd=1000,
+                    )
+                ],
+                organization_id=1,
+                integration_id=1,
+            )
+
+            service = BalanceService(session=session, organization_id=1)
+            outlier = ServiceBalanceSchema(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=10000, value_usd=10000)],
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=10000, value_usd=10000)],
+                        total_usd=10000,
+                    )
+                ],
+                total_usd=10000,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+
+            with self.assertRaisesRegex(BalanceIntegrityError, "outlier"):
+                await service.fetch_and_save_balance("evm_0xabc", outlier, integration_id=1)
+
+            latest = await repo.get_latest_balance("evm_0xabc", organization_id=1, integration_id=1)
+            history = await repo.get_history(
+                organization_id=1,
+                service="evm_0xabc",
+                integration_id=1,
+                limit=10,
+            )
+
+        self.assertEqual(latest.total_usd, 1000)
+        self.assertEqual(len(history), 1)
+
+    async def test_balance_service_rejects_outlier_against_stale_previous(self):
+        async with self.session_maker() as session:
+            repo = BalanceRepository(session)
+            await repo.save_balance(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=1000, value_usd=1000)],
+                total_usd=1000,
+                actual=True,
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=1000, value_usd=1000)],
+                        total_usd=1000,
+                    )
+                ],
+                organization_id=1,
+                integration_id=1,
+            )
+            await repo.mark_as_stale("evm_0xabc", organization_id=1, integration_id=1)
+
+            service = BalanceService(session=session, organization_id=1)
+            outlier = ServiceBalanceSchema(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=10000, value_usd=10000)],
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=10000, value_usd=10000)],
+                        total_usd=10000,
+                    )
+                ],
+                total_usd=10000,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+
+            with self.assertRaisesRegex(BalanceIntegrityError, "outlier"):
+                await service.fetch_and_save_balance("evm_0xabc", outlier, integration_id=1)
+
+            latest = await repo.get_latest_balance("evm_0xabc", organization_id=1, integration_id=1)
+
+        self.assertEqual(latest.total_usd, 1000)
+        self.assertFalse(latest.actual)
+
+    async def test_balance_service_allows_first_empty_zero_balance(self):
+        async with self.session_maker() as session:
+            service = BalanceService(session=session, organization_id=1)
+            zero = ServiceBalanceSchema(
+                service="new_empty_exchange",
+                assets=[],
+                accounts=[],
+                total_usd=0,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+
+            saved = await service.fetch_and_save_balance("new_empty_exchange", zero)
+
+        self.assertEqual(saved.total_usd, 0)
+        self.assertTrue(saved.actual)
+
+    async def test_balance_service_rejects_empty_positive_payload(self):
+        async with self.session_maker() as session:
+            service = BalanceService(session=session, organization_id=1)
+            empty_positive = ServiceBalanceSchema(
+                service="evm_0xabc",
+                assets=[],
+                accounts=[],
+                total_usd=25,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+
+            with self.assertRaisesRegex(BalanceIntegrityError, "Empty positive"):
+                await service.fetch_and_save_balance("evm_0xabc", empty_positive)
+
+    async def test_sync_job_persist_rejects_invalid_balance_and_marks_unhealthy(self):
+        async with self.session_maker() as session:
+            service = SyncJobService(session)
+            with self.assertRaisesRegex(BalanceIntegrityError, "total/assets mismatch"):
+                await service._persist_balance_from_refresh_result(
+                    1,
+                    {
+                        "balance": {
+                            "integration_id": 10,
+                            "service": "evm_0xabc",
+                            "assets": [
+                                {"coin": "USDC", "amount": 10, "value_usd": 10}
+                            ],
+                            "accounts": [],
+                            "total_usd": 1000000,
+                            "actual": True,
+                        }
+                    },
+                )
+
+            latest = await BalanceRepository(session).get_latest_balance(
+                "evm_0xabc",
+                organization_id=1,
+                integration_id=10,
+            )
+            status = await ServiceStatusRepository(session).get_status(
+                "evm_0xabc",
+                organization_id=1,
+            )
+
+        self.assertIsNone(latest)
+        self.assertIsNotNone(status)
+        self.assertFalse(status.is_healthy)
+        self.assertIn("total/assets mismatch", status.last_error)

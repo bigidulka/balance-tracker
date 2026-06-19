@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.balance import Integration, IntegrationSecret, SyncJob
 from app.repositories.balance import BalanceRepository, ServiceStatusRepository
+from app.services.balance_integrity import (
+    BalanceIntegrityError,
+    validate_balance_for_persistence,
+)
 from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 from app.services.entitlements_service import EntitlementsService
 from app.services.integrations import get_provider
@@ -70,6 +74,12 @@ class SyncJobService:
         if not isinstance(raw_balance, dict):
             return
 
+        raw_actual = raw_balance.get("actual", True)
+        if isinstance(raw_actual, str):
+            actual = raw_actual.strip().lower() not in {"0", "false", "no", "off"}
+        else:
+            actual = bool(raw_actual)
+
         balance = ServiceBalanceSchema(
             integration_id=(
                 int(raw_balance.get("integration_id"))
@@ -105,7 +115,7 @@ class SyncJobService:
             ],
             total_usd=float(raw_balance.get("total_usd") or 0.0),
             updated_at=datetime.now(timezone.utc),
-            actual=bool(raw_balance.get("actual", True)),
+            actual=actual,
         )
 
         if not balance.service:
@@ -119,6 +129,23 @@ class SyncJobService:
                 organization_id=organization_id,
             )
             raise ValueError(f"Degraded balance payload for {balance.service}")
+
+        try:
+            await validate_balance_for_persistence(
+                self.balance_repo,
+                organization_id=organization_id,
+                service=balance.service,
+                balance=balance,
+                integration_id=balance.integration_id,
+            )
+        except BalanceIntegrityError as exc:
+            await self.status_repo.update_status(
+                balance.service,
+                is_healthy=False,
+                last_error=str(exc),
+                organization_id=organization_id,
+            )
+            raise
 
         await self.balance_repo.save_balance(
             service=balance.service,

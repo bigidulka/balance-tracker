@@ -92,6 +92,12 @@ class Settings(BaseSettings):
 
     balance_cache_ttl: int = Field(default=60)
     balance_cache_hard_ttl: int = Field(default=120)
+    balance_integrity_enabled: bool = Field(default=True)
+    balance_integrity_total_mismatch_abs_usd: float = Field(default=5.0)
+    balance_integrity_total_mismatch_rel: float = Field(default=0.05)
+    balance_integrity_outlier_min_previous_usd: float = Field(default=100.0)
+    balance_integrity_outlier_min_abs_usd: float = Field(default=1000.0)
+    balance_integrity_outlier_max_relative_change: float = Field(default=1.0)
     request_timeout: int = Field(default=30)
     exchange_default_transport: str = Field(default="ccxt")
     exchange_transport_overrides: str = Field(default="{}")
