@@ -18,6 +18,42 @@ class SyncJobRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.engine.dispose()
 
+    async def test_recover_stale_running_jobs_uses_provider_timeout_ceiling_by_default(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Provider Timeout Org", slug="provider-timeout-org")
+            session.add(org)
+            await session.flush()
+
+            now = datetime.now(timezone.utc)
+            stale_after_provider_timeout = SyncJob(
+                organization_id=org.id,
+                integration_id=None,
+                job_type="refresh",
+                status="running",
+                payload={},
+                result={},
+                started_at=now - timedelta(minutes=4),
+            )
+            fresh = SyncJob(
+                organization_id=org.id,
+                integration_id=None,
+                job_type="refresh",
+                status="running",
+                payload={},
+                result={},
+                started_at=now - timedelta(seconds=30),
+            )
+            session.add_all([stale_after_provider_timeout, fresh])
+            await session.commit()
+
+            recovered = await SyncJobService(session).recover_stale_running_jobs()
+            await session.refresh(stale_after_provider_timeout)
+            await session.refresh(fresh)
+
+            self.assertEqual(recovered, 1)
+            self.assertEqual(stale_after_provider_timeout.status, "failed")
+            self.assertEqual(fresh.status, "running")
+
     async def test_recover_stale_running_jobs_marks_only_stale_jobs_failed(self):
         async with self.session_maker() as session:
             org = Organization(name="Recovery Org", slug="recovery-org")

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from sqlalchemy import text
@@ -25,6 +26,7 @@ from app.services.entitlements_service import EntitlementsService
 from app.services.metrics_service import metrics_service
 from app.services.okx_wallet import okx_wallet_service
 from app.services.refresh_orchestrator import RefreshOrchestrator
+from app.services.sync_job_service import SyncJobService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,10 +163,23 @@ async def inprocess_sync_worker_loop(worker_id: int):
         settings.sync_worker_poll_interval_seconds,
     )
 
+    last_recovery_at = 0.0
+    recovery_interval = max(30.0, float(settings.sync_job_stale_recovery_interval_seconds or 0.0))
+
     while True:
         try:
             with metrics_service.time("worker_run_next_job_seconds"):
                 async with async_session_maker() as db:
+                    now = time.monotonic()
+                    if now - last_recovery_at >= recovery_interval:
+                        recovered = await SyncJobService(db).recover_stale_running_jobs()
+                        last_recovery_at = now
+                        if recovered:
+                            logger.warning(
+                                "Recovered stale running sync jobs count=%s worker_id=%s",
+                                recovered,
+                                worker_id,
+                            )
                     job = await RefreshOrchestrator(db).run_next_job()
 
             if job is None:

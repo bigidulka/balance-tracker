@@ -33,13 +33,27 @@ class SyncJobService:
         self.balance_repo = BalanceRepository(session)
         self.status_repo = ServiceStatusRepository(session)
 
+    def _stale_running_timeout_seconds(self, timeout_seconds: int | None = None) -> int:
+        if timeout_seconds is not None:
+            return max(60, int(timeout_seconds))
+
+        configured_timeout = int(settings.sync_job_running_timeout_seconds or 0)
+        provider_timeout = float(settings.sync_job_provider_timeout_seconds or 0.0)
+        if provider_timeout > 0:
+            provider_timeout_ceiling = int(provider_timeout) + 60
+            if configured_timeout > 0:
+                configured_timeout = min(configured_timeout, provider_timeout_ceiling)
+            else:
+                configured_timeout = provider_timeout_ceiling
+        return max(60, configured_timeout)
+
     async def recover_stale_running_jobs(
         self,
         *,
         timeout_seconds: int | None = None,
         organization_id: int | None = None,
     ) -> int:
-        timeout = max(60, int(timeout_seconds or settings.sync_job_running_timeout_seconds))
+        timeout = self._stale_running_timeout_seconds(timeout_seconds)
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout)
         predicates = [
             SyncJob.status == "running",
