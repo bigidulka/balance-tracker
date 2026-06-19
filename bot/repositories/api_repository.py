@@ -177,8 +177,16 @@ class ApiRepository:
         )
         return payload if isinstance(payload, dict) else {}
 
-    async def generate_notifications(self, kind: str = "all") -> dict[str, Any]:
-        payload = await api_client.generate_notifications(kind=kind)
+    async def generate_notifications(
+        self,
+        kind: str = "all",
+        *,
+        poll_transactions: bool = False,
+    ) -> dict[str, Any]:
+        payload = await api_client.generate_notifications(
+            kind=kind,
+            poll_transactions=poll_transactions,
+        )
         return payload if isinstance(payload, dict) else {}
 
     async def mark_notification_event_sent(self, event_id: int) -> dict[str, Any]:

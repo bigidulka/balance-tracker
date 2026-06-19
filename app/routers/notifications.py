@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +16,9 @@ from app.schemas.notifications import (
 )
 from pydantic import BaseModel
 from app.services.notification_service import NotificationService
+from app.services.transaction_service import TransactionService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
 
@@ -111,6 +114,7 @@ async def mark_notification_event_failed(
 @router.post("/generate")
 async def generate_notification_events(
     kind: Literal["system", "transactions", "all"] = Query(default="all"),
+    poll_transactions: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     organization_id: int = Depends(get_current_organization_id),
     _: object = Depends(require_role("member")),
@@ -119,6 +123,7 @@ async def generate_notification_events(
     system_events = 0
     sync_job_events = 0
     transaction_events = 0
+    transaction_refresh: dict[str, object] | None = None
     if kind in {"system", "all"}:
         system_events = await service.generate_system_status_events(
             organization_id=organization_id,
@@ -127,6 +132,26 @@ async def generate_notification_events(
             organization_id=organization_id,
         )
     if kind in {"transactions", "all"}:
+        if poll_transactions:
+            try:
+                refresh_result = await TransactionService(
+                    db,
+                    organization_id=organization_id,
+                ).refresh_transactions(since_hours=24)
+                transaction_refresh = {
+                    "status": refresh_result.status,
+                    "new_transactions": refresh_result.new_transactions,
+                    "updated_transactions": refresh_result.updated_transactions,
+                    "services_checked": refresh_result.services_checked,
+                    "failed_services": refresh_result.failed_services,
+                }
+            except Exception as exc:
+                logger.warning(
+                    "Notification transaction polling failed for org %s: %s",
+                    organization_id,
+                    exc,
+                )
+                transaction_refresh = {"status": "error", "error": str(exc)}
         transaction_events = await service.generate_transaction_events(
             organization_id=organization_id,
         )
@@ -135,4 +160,5 @@ async def generate_notification_events(
         "system_events": system_events,
         "sync_job_events": sync_job_events,
         "transaction_events": transaction_events,
+        "transaction_refresh": transaction_refresh,
     }

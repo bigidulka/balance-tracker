@@ -8,7 +8,7 @@ import aiohttp
 
 from app.core.config import get_settings
 from app.core.http import request_proxy_kwargs, session_kwargs
-from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema
+from app.schemas.balance import AssetSchema, AccountBalanceSchema, ServiceBalanceSchema, TransactionSchema
 from app.services.balance_integrity import validate_balance_shape
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,111 @@ class DeBankSdkClient:
         )
         validate_balance_shape(balance)
         return balance
+
+    @staticmethod
+    def _dominant_transfer(transfers: list[dict[str, Any]]) -> dict[str, Any]:
+        if not transfers:
+            return {}
+        return max(
+            transfers,
+            key=lambda item: abs(float(item.get("usdValue") or 0.0)),
+        )
+
+    @staticmethod
+    def _transaction_status(raw_status: Any) -> str:
+        try:
+            status = int(raw_status)
+        except (TypeError, ValueError):
+            return "pending"
+        if status == 1:
+            return "ok"
+        if status < 0:
+            return "failed"
+        return "pending"
+
+    def _build_transaction(
+        self,
+        *,
+        item: dict[str, Any],
+        wallet_address: str,
+        service: str,
+        integration_id: int | None,
+    ) -> TransactionSchema | None:
+        key = str(item.get("key") or "").strip()
+        if not key:
+            return None
+        receives = [entry for entry in (item.get("receives") or []) if isinstance(entry, dict)]
+        sends = [entry for entry in (item.get("sends") or []) if isinstance(entry, dict)]
+        received_usd = float(item.get("receivedUsd") or 0.0)
+        sent_usd = float(item.get("sentUsd") or 0.0)
+        tx_type = "deposit" if received_usd >= sent_usd else "withdrawal"
+        transfer = self._dominant_transfer(receives if tx_type == "deposit" else sends)
+        if not transfer:
+            transfer = self._dominant_transfer(sends if tx_type == "deposit" else receives)
+        symbol = str(transfer.get("symbol") or transfer.get("name") or "UNKNOWN")
+        amount = abs(float(transfer.get("amount") or 0.0))
+        timestamp = item.get("timeAt")
+        tx_timestamp = None
+        if timestamp:
+            try:
+                tx_timestamp = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+            except (TypeError, ValueError, OSError):
+                tx_timestamp = None
+        other_addr = str(item.get("otherAddr") or "") or None
+        address_from = other_addr if tx_type == "deposit" else wallet_address
+        address_to = wallet_address if tx_type == "deposit" else other_addr
+        chain = str(item.get("chain") or item.get("chainName") or "dex")
+        return TransactionSchema(
+            integration_id=integration_id,
+            tx_id=f"{service}:{key}",
+            service=service,
+            tx_type=tx_type,
+            currency=symbol,
+            amount=amount,
+            fee=0.0,
+            fee_currency=None,
+            network=chain,
+            address=wallet_address,
+            address_from=address_from,
+            address_to=address_to,
+            status=self._transaction_status(item.get("status")),
+            txid=key,
+            tx_timestamp=tx_timestamp,
+            notified=False,
+        )
+
+    async def fetch_wallet_transactions(
+        self,
+        wallet_address: str,
+        *,
+        service: str,
+        integration_id: int | None = None,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionSchema]:
+        page_size = max(1, min(int(limit or 20), 20))
+        path = (
+            f"/users/0/wallets/{quote(wallet_address, safe='')}/transactions"
+            f"?cursor=0&pageSize={page_size}&hideScam=true"
+        )
+        payload = await self._request_json(path)
+        items = payload.get("items") or []
+        transactions: list[TransactionSchema] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            tx = self._build_transaction(
+                item=item,
+                wallet_address=wallet_address,
+                service=service,
+                integration_id=integration_id,
+            )
+            if tx is None:
+                continue
+            if since is not None and tx.tx_timestamp is not None and tx.tx_timestamp < since:
+                continue
+            transactions.append(tx)
+        return transactions
 
     async def healthcheck(self) -> dict[str, Any]:
         return await self._request_json("/health")

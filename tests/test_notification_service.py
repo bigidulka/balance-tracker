@@ -161,6 +161,48 @@ class NotificationServiceTests(unittest.IsolatedAsyncioTestCase):
                 0,
             )
 
+    async def test_transaction_events_include_healthy_dex_wallet_sources(self):
+        async with self.session_maker() as session:
+            org, user = await self._org_user(session)
+            service_key = "evm_0xabc"
+            session.add(
+                ServiceStatus(
+                    organization_id=org.id,
+                    service=service_key,
+                    is_healthy=True,
+                )
+            )
+            await session.commit()
+
+            service = NotificationService(session)
+            await service.update_settings(
+                organization_id=org.id,
+                user_id=user.id,
+                payload=NotificationSettingsUpdate(transaction_enabled=True),
+            )
+            session.add(
+                Transaction(
+                    organization_id=org.id,
+                    tx_id="dex-new",
+                    service=service_key,
+                    tx_type="deposit",
+                    currency="USDC",
+                    amount=3,
+                    status="ok",
+                    network="eth",
+                    tx_timestamp=datetime.now(timezone.utc),
+                )
+            )
+            await session.commit()
+
+            self.assertEqual(
+                await service.generate_transaction_events(organization_id=org.id),
+                1,
+            )
+            events = await service.list_events(organization_id=org.id, user_id=user.id)
+            self.assertEqual(events.events[0].event_type, "transaction")
+            self.assertIn("DEX", events.events[0].title)
+
     async def test_system_status_events_baseline_then_transition(self):
         async with self.session_maker() as session:
             org, user = await self._org_user(session)

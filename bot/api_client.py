@@ -468,7 +468,12 @@ class APIClient:
             resp.raise_for_status()
             return await resp.json()
 
-    async def generate_notifications(self, kind: str = "all") -> Dict[str, Any]:
+    async def generate_notifications(
+        self,
+        kind: str = "all",
+        *,
+        poll_transactions: bool = False,
+    ) -> Dict[str, Any]:
         if self.no_backend_ui_mode:
             return {"status": "ok", "system_events": 0, "transaction_events": 0}
 
@@ -476,7 +481,9 @@ class APIClient:
         async with session.post(
             f"{settings.api_url}/api/v1/notifications/generate",
             headers=self._build_headers(),
-            params=self._add_org_param({"kind": kind}),
+            params=self._add_org_param(
+                {"kind": kind, "poll_transactions": str(bool(poll_transactions)).lower()}
+            ),
         ) as resp:
             resp.raise_for_status()
             return await resp.json()

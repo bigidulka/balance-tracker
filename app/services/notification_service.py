@@ -34,6 +34,17 @@ SUPPORTED_CEX_TRANSACTION_SOURCES = {
     "poloniex",
     "xt",
 }
+SUPPORTED_DEX_TRANSACTION_SOURCE_PREFIXES = ("evm_", "sol_")
+
+
+def _is_supported_transaction_source(source: str) -> bool:
+    return source in SUPPORTED_CEX_TRANSACTION_SOURCES or source.startswith(
+        SUPPORTED_DEX_TRANSACTION_SOURCE_PREFIXES
+    )
+
+
+def _is_dex_transaction_source(source: str) -> bool:
+    return source.startswith(SUPPORTED_DEX_TRANSACTION_SOURCE_PREFIXES)
 
 
 class NotificationService:
@@ -479,7 +490,7 @@ class NotificationService:
                 service_key = str(tx.service or "").strip().lower()
                 if service_key in muted:
                     continue
-                if service_key not in SUPPORTED_CEX_TRANSACTION_SOURCES:
+                if not _is_supported_transaction_source(service_key):
                     continue
                 if service_key not in healthy_services:
                     continue
@@ -528,12 +539,22 @@ class NotificationService:
 
     @staticmethod
     def _transaction_title(tx: Transaction) -> str:
+        service = str(tx.service or "")
         direction = "Deposit" if tx.tx_type == "deposit" else "Withdrawal"
+        if _is_dex_transaction_source(service):
+            direction = "Incoming" if tx.tx_type == "deposit" else "Outgoing"
+            return f"DEX {direction} transaction"
         return f"{direction} on {tx.service}"
 
     @staticmethod
     def _transaction_body(tx: Transaction) -> str:
+        service = str(tx.service or "")
         direction = "Received" if tx.tx_type == "deposit" else "Sent"
+        if _is_dex_transaction_source(service):
+            direction = "Received" if tx.tx_type == "deposit" else "Sent"
         amount = float(tx.amount or 0.0)
         timestamp = tx.tx_timestamp.isoformat() if tx.tx_timestamp else "unknown time"
+        network = f" on {tx.network}" if tx.network else ""
+        if _is_dex_transaction_source(service):
+            return f"{direction} {amount:g} {tx.currency}{network} ({timestamp})"
         return f"{direction} {amount:g} {tx.currency} via {tx.service} ({timestamp})"

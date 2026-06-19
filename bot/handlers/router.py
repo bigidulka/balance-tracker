@@ -37,6 +37,7 @@ from bot.contracts.callbacks import (
     ROUTE_INTEGRATIONS,
     ROUTE_INPUT,
     ROUTE_MAIN,
+    ROUTE_NOTIFICATIONS,
     ROUTE_PAYMENTS,
     ROUTE_PLAN,
     ROUTE_ADMIN,

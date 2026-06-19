@@ -454,7 +454,10 @@ async def check_and_send_notification_events(bot: Bot) -> None:
             backend_auth = await ensure_backend_auth_session(telegram_user_id=user_id)
             backend_token = set_current_backend_auth_session(backend_auth)
             try:
-                await api_client.generate_notifications(kind="all")
+                await api_client.generate_notifications(
+                    kind="all",
+                    poll_transactions=True,
+                )
             except Exception as exc:
                 logger.warning("Failed to generate notifications for %s: %s", user_id, exc)
 

@@ -15,6 +15,8 @@ from app.schemas.balance import (
 )
 from app.services.ccxt_manager import ccxt_manager
 from app.services.entitlements_service import EntitlementsService
+from app.services.debank_sdk_client import debank_sdk_client
+from app.services.integration_keys import service_key_for_integration
 from app.services.integration_service import IntegrationService
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ SUPPORTED_CEX_TRANSACTION_EXCHANGES = {
     "poloniex",
     "xt",
 }
+SUPPORTED_DEX_TRANSACTION_SERVICE_PREFIXES = ("evm_", "sol_")
 
 
 class TransactionService:
@@ -73,9 +76,41 @@ class TransactionService:
                 continue
             targets.append(
                 {
+                    "kind": "cex",
                     "integration_id": integration.id,
                     "service": exchange_code,
                     "exchange_id": exchange_code,
+                }
+            )
+        return targets
+
+    async def _load_active_dex_targets(self) -> list[dict[str, Any]]:
+        integrations = await self.integration_service.list_integrations(
+            self.organization_id,
+            include_inactive=False,
+        )
+        targets: list[dict[str, Any]] = []
+        for integration in integrations:
+            if str(integration.kind or "").strip().lower() != "dex":
+                continue
+            wallet_address = str(integration.wallet_address or "").strip()
+            if not wallet_address:
+                continue
+            service_key = service_key_for_integration(integration)
+            if not service_key.startswith(SUPPORTED_DEX_TRANSACTION_SERVICE_PREFIXES):
+                continue
+            service_status = await self.status_repo.get_status(
+                service_key,
+                organization_id=self.organization_id,
+            )
+            if service_status is not None and not bool(service_status.is_healthy):
+                continue
+            targets.append(
+                {
+                    "kind": "dex",
+                    "integration_id": integration.id,
+                    "service": service_key,
+                    "wallet_address": wallet_address,
                 }
             )
         return targets
@@ -223,12 +258,17 @@ class TransactionService:
             for exchange_id in (exchange_ids or [])
             if str(exchange_id).strip().lower() in SUPPORTED_CEX_TRANSACTION_EXCHANGES
         ]
-        targets = [] if explicit_exchange_ids else await self._load_active_exchange_targets()
+        targets = []
+        if not explicit_exchange_ids:
+            targets = [
+                *(await self._load_active_exchange_targets()),
+                *(await self._load_active_dex_targets()),
+            ]
 
         if not explicit_exchange_ids and not targets:
             return TransactionsRefreshResponse(
                 status="ok",
-                message="No active exchange integrations to refresh",
+                message="No active integrations to refresh",
                 new_transactions=0,
                 updated_transactions=0,
                 services_checked=[],
@@ -237,7 +277,10 @@ class TransactionService:
 
         target_keys = sorted(
             explicit_exchange_ids
-            or [f"{target['exchange_id']}:{target['integration_id']}" for target in targets]
+            or [
+                f"{target['kind']}:{target['service']}:{target['integration_id']}"
+                for target in targets
+            ]
         )
         inflight_key = f"org:{self.organization_id}:since:{since_hours}:targets:{','.join(target_keys)}"
 
@@ -267,15 +310,23 @@ class TransactionService:
                 iterable_targets = targets
 
             for target in iterable_targets:
-                exchange_id = str(target["exchange_id"])
+                service_key = str(target.get("service") or target.get("exchange_id") or "")
                 integration_id = target.get("integration_id")
                 try:
                     if "result" in target:
                         result = target["result"]
+                    elif target.get("kind") == "dex":
+                        result = await debank_sdk_client.fetch_wallet_transactions(
+                            str(target["wallet_address"]),
+                            service=service_key,
+                            integration_id=int(integration_id) if integration_id is not None else None,
+                            since=since,
+                            limit=20,
+                        )
                     else:
                         config_override = await self._load_cex_config_override(int(integration_id))
                         result = await ccxt_manager.fetch_all_transactions(
-                            exchange_id,
+                            service_key,
                             since=since,
                             limit=100,
                             config_override=config_override,
@@ -285,12 +336,12 @@ class TransactionService:
 
                 if isinstance(result, Exception):
                     logger.warning(
-                        f"Failed to fetch transactions from {exchange_id}: {result}"
+                        f"Failed to fetch transactions from {service_key}: {result}"
                     )
-                    failed_services.append(exchange_id)
+                    failed_services.append(service_key)
                     continue
 
-                checked_services.append(exchange_id)
+                checked_services.append(service_key)
                 scoped_transactions = [
                     tx.model_copy(update={"integration_id": integration_id})
                     for tx in result
@@ -305,7 +356,7 @@ class TransactionService:
                     updated_count += exchange_updated
                 except Exception as e:
                     logger.error(
-                        f"Failed to save transactions batch for {exchange_id}: {e}"
+                        f"Failed to save transactions batch for {service_key}: {e}"
                     )
                     for tx_data in scoped_transactions:
                         try:
