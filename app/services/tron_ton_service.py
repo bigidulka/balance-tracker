@@ -651,17 +651,28 @@ class TronTonService:
         page_limit = max(1, min(int(limit or 20), 50))
         session = await self._get_session()
         url = _TONAPI_EVENTS_URL.format(address=target)
-        try:
-            async with session.get(
-                url,
-                params={"limit": page_limit},
-                headers=self._default_headers(),
-                **request_proxy_kwargs(),
-            ) as resp:
-                resp.raise_for_status()
-                data: dict[str, Any] = await resp.json()
-        except Exception as exc:
-            raise ValueError(f"tonapi events request failed for {target}: {exc}") from exc
+        last_error: Exception | None = None
+        data: dict[str, Any] = {}
+        for attempt in range(3):
+            try:
+                async with session.get(
+                    url,
+                    params={"limit": page_limit},
+                    headers=self._default_headers(),
+                    **request_proxy_kwargs(),
+                ) as resp:
+                    if resp.status in (429, 502, 503):
+                        last_error = ValueError(f"tonapi events returned {resp.status}")
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    break
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(1.0 * (attempt + 1))
+        else:
+            raise ValueError(f"tonapi events request failed for {target}: {last_error}") from last_error
 
         transactions: list[TransactionSchema] = []
         target_lower = target.lower()

@@ -376,23 +376,29 @@ class SuiService:
             )
 
         page_limit = max(1, min(int(limit or 20), 50))
-        result = await self._rpc_call(
-            "suix_queryTransactionBlocks",
-            [
-                {
-                    "filter": {"FromOrToAddress": {"addr": target}},
-                    "options": {
-                        "showBalanceChanges": True,
-                        "showEffects": True,
-                        "showInput": True,
+        query_options = {
+            "showBalanceChanges": True,
+            "showEffects": True,
+            "showInput": True,
+        }
+        rows_by_digest: dict[str, dict[str, Any]] = {}
+        for filter_key in ("FromAddress", "ToAddress"):
+            result = await self._rpc_call(
+                "suix_queryTransactionBlocks",
+                [
+                    {
+                        "filter": {filter_key: target},
+                        "options": query_options,
                     },
-                },
-                None,
-                page_limit,
-                True,
-            ],
-        )
-        rows = result.get("data") if isinstance(result, dict) else []
+                    None,
+                    page_limit,
+                    True,
+                ],
+            )
+            for row in (result.get("data") if isinstance(result, dict) else []) or []:
+                if isinstance(row, dict) and row.get("digest"):
+                    rows_by_digest[str(row["digest"])] = row
+        rows = list(rows_by_digest.values())
         service_key = service or self.service_name_for(target)
         target_lower = target.lower()
         transactions: list[TransactionSchema] = []
