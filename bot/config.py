@@ -17,6 +17,7 @@ class Settings:
     admin_users: tuple[int, ...]
     hide_small_balance_threshold: float
     notification_interval: int
+    enable_notification_loop: bool
     min_stablecoin_change: float
     min_token_change_percent: float
     no_backend_ui_mode: bool
@@ -55,6 +56,7 @@ settings = Settings(
     admin_users=_parse_int_list(os.getenv("BOT_ADMIN_USERS", "6238100241")),
     hide_small_balance_threshold=float(os.getenv("HIDE_SMALL_THRESHOLD", "1.0")),
     notification_interval=int(os.getenv("NOTIFICATION_INTERVAL", "60")),
+    enable_notification_loop=_parse_bool(os.getenv("ENABLE_NOTIFICATION_LOOP", "false"), default=False),
     min_stablecoin_change=float(os.getenv("MIN_STABLECOIN_CHANGE", "1.0")),
     min_token_change_percent=float(os.getenv("MIN_TOKEN_CHANGE_PERCENT", "0.1")),
     no_backend_ui_mode=_parse_bool(os.getenv("NO_BACKEND_UI_MODE", "false"), default=False),
@@ -71,6 +73,7 @@ ALLOWED_USERS = list(settings.allowed_users)
 BOT_ADMIN_USERS = list(settings.admin_users)
 HIDE_SMALL_BALANCE_THRESHOLD = settings.hide_small_balance_threshold
 NOTIFICATION_INTERVAL = settings.notification_interval
+ENABLE_NOTIFICATION_LOOP = settings.enable_notification_loop
 MIN_STABLECOIN_CHANGE = settings.min_stablecoin_change
 MIN_TOKEN_CHANGE_PERCENT = settings.min_token_change_percent
 NO_BACKEND_UI_MODE = settings.no_backend_ui_mode

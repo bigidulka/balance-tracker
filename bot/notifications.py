@@ -444,3 +444,58 @@ async def transaction_notification_loop(bot: Bot, interval: int = 120) -> None:
         except Exception as exc:
             logger.error("Transaction notification loop error: %s", exc)
         await asyncio.sleep(interval)
+
+
+async def check_and_send_notification_events(bot: Bot) -> None:
+    for user_id in await get_notification_recipients():
+        tg_token = set_current_telegram_user_id(user_id)
+        backend_token = None
+        try:
+            backend_auth = await ensure_backend_auth_session(telegram_user_id=user_id)
+            backend_token = set_current_backend_auth_session(backend_auth)
+            try:
+                await api_client.generate_notifications(kind="all")
+            except Exception as exc:
+                logger.warning("Failed to generate notifications for %s: %s", user_id, exc)
+
+            payload = await api_client.get_notification_events(status="pending", limit=20)
+            events = payload.get("events") if isinstance(payload, dict) else []
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_id = int(event.get("id") or 0)
+                title = str(event.get("title") or "Notification")
+                body = str(event.get("body") or "")
+                message = f"🔔 <b>{title}</b>"
+                if body:
+                    message += f"\n\n{body}"
+                try:
+                    await bot.send_message(user_id, message, parse_mode="HTML")
+                    await api_client.mark_notification_event_sent(event_id)
+                except Exception as exc:
+                    logger.error("Failed to send notification event %s to %s: %s", event_id, user_id, exc)
+                    if event_id:
+                        try:
+                            await api_client.mark_notification_event_failed(event_id, str(exc))
+                        except Exception:
+                            pass
+        finally:
+            tg_token.var.reset(tg_token)
+            if backend_token is not None:
+                backend_token.var.reset(backend_token)
+
+
+async def notification_event_loop(bot: Bot, interval: int = 60) -> None:
+    logger.info("Starting notification event loop with %ss interval", interval)
+    await asyncio.sleep(15)
+    while True:
+        try:
+            await check_and_send_notification_events(bot)
+        except asyncio.CancelledError:
+            logger.info("Notification event loop cancelled")
+            break
+        except Exception as exc:
+            logger.error("Notification event loop error: %s", exc)
+        await asyncio.sleep(interval)

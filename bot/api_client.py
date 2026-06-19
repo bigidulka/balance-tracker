@@ -410,6 +410,104 @@ class APIClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def get_notification_settings(self) -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            return {
+                "enabled": True,
+                "system_enabled": True,
+                "transaction_enabled": False,
+                "balance_enabled": False,
+                "muted_services": [],
+                "channels": ["telegram"],
+            }
+
+        session = await self._get_session()
+        async with session.get(
+            f"{settings.api_url}/api/v1/notifications/settings",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def update_notification_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            current = await self.get_notification_settings()
+            current.update(payload)
+            return current
+
+        session = await self._get_session()
+        async with session.patch(
+            f"{settings.api_url}/api/v1/notifications/settings",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+            json=payload,
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_notification_events(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            return {"events": [], "total_count": 0}
+
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        session = await self._get_session()
+        async with session.get(
+            f"{settings.api_url}/api/v1/notifications/events",
+            headers=self._build_headers(),
+            params=self._add_org_param(params),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def generate_notifications(self, kind: str = "all") -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            return {"status": "ok", "system_events": 0, "transaction_events": 0}
+
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/notifications/generate",
+            headers=self._build_headers(),
+            params=self._add_org_param({"kind": kind}),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def mark_notification_event_sent(self, event_id: int) -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            return {"status": "ok"}
+
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/notifications/events/{event_id}/sent",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def mark_notification_event_failed(self, event_id: int, error_message: str) -> Dict[str, Any]:
+        if self.no_backend_ui_mode:
+            return {"status": "ok"}
+
+        session = await self._get_session()
+        async with session.post(
+            f"{settings.api_url}/api/v1/notifications/events/{event_id}/failed",
+            headers=self._build_headers(),
+            params=self._add_org_param(),
+            json={"error_message": error_message},
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
     async def get_capabilities(self) -> Dict[str, Any]:
         """Get capabilities/entitlements payload if API provides it."""
         if self.no_backend_ui_mode:

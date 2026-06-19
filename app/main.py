@@ -18,6 +18,7 @@ from app.routers.auth import router as auth_router
 from app.routers.balances import router as balances_router
 from app.routers.billing import router as billing_router
 from app.routers.integrations import router as integrations_router
+from app.routers.notifications import router as notifications_router
 from app.routers.observability import router as observability_router
 from app.routers.transactions import router as transactions_router
 from app.services.balance_service import BalanceService
@@ -306,6 +307,7 @@ app.include_router(admin_router)
 app.include_router(balances_router)
 app.include_router(transactions_router)
 app.include_router(integrations_router)
+app.include_router(notifications_router)
 app.include_router(billing_router)
 app.include_router(observability_router)
 

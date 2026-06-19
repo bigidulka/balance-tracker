@@ -155,6 +155,40 @@ class ApiRepository:
         payload = await api_client.refresh_transactions(since_hours=since_hours)
         return payload if isinstance(payload, dict) else {}
 
+    async def get_notification_settings(self) -> dict[str, Any]:
+        payload = await api_client.get_notification_settings()
+        return payload if isinstance(payload, dict) else {}
+
+    async def update_notification_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = await api_client.update_notification_settings(payload)
+        return response if isinstance(response, dict) else {}
+
+    async def get_notification_events(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        payload = await api_client.get_notification_events(
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    async def generate_notifications(self, kind: str = "all") -> dict[str, Any]:
+        payload = await api_client.generate_notifications(kind=kind)
+        return payload if isinstance(payload, dict) else {}
+
+    async def mark_notification_event_sent(self, event_id: int) -> dict[str, Any]:
+        payload = await api_client.mark_notification_event_sent(event_id)
+        return payload if isinstance(payload, dict) else {}
+
+    async def mark_notification_event_failed(self, event_id: int, error_message: str) -> dict[str, Any]:
+        payload = await api_client.mark_notification_event_failed(event_id, error_message)
+        return payload if isinstance(payload, dict) else {}
+
     async def get_integrations(self) -> list[dict[str, Any]]:
         cached = self._cache_get("integrations")
         if isinstance(cached, list):

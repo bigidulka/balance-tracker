@@ -16,6 +16,7 @@ from bot import messages as msg
 from bot.config import settings
 from bot.contracts.callbacks import (
     ACTION_BACK,
+    ACTION_TOGGLE,
     ROUTE_DEX,
     ROUTE_FUTURES_DETAIL,
     ROUTE_FUTURES_LIST,
@@ -1499,17 +1500,93 @@ class ScreenService:
             keyboard=builder.as_markup(),
         )
 
+    async def update_notification_toggle(self, *, field: str) -> dict[str, Any]:
+        current = await self.api_repo.get_notification_settings()
+        value = not bool(current.get(field))
+        return await self.api_repo.update_notification_settings({field: value})
+
     async def _render_notifications_stub(
         self, *, user_id: int, rev: int
     ) -> RenderedScreen:
         user_settings = await self.user_repo.get_settings(user_id)
         locale = self._locale_from_settings(user_settings)
+        settings_payload = await self.api_repo.get_notification_settings()
+        events_payload = await self.api_repo.get_notification_events(limit=5)
+        events = events_payload.get("events") if isinstance(events_payload, dict) else []
+        if not isinstance(events, list):
+            events = []
+
+        def _status(name: str) -> str:
+            return "✅" if bool(settings_payload.get(name)) else "⬜"
+
+        lines = [
+            f"{_status('enabled')} Общие уведомления",
+            f"{_status('system_enabled')} Системные события",
+            f"{_status('transaction_enabled')} Транзакции CEX (beta)",
+            f"{_status('balance_enabled')} Изменения баланса",
+        ]
+        recent = []
+        for item in events[:5]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("event_type") or "event")
+            status = str(item.get("status") or "pending")
+            recent.append(f"• {title} — {status}")
+
         text = Text(
-            Bold(f"\U0001f6a7 {t(locale, 'notifications')}"),
+            Bold(f"🔔 {t(locale, 'notifications')}"),
             "\n\n",
-            t(locale, "notifications_in_dev"),
+            "Настройка уведомлений по системе, интеграциям и транзакциям.",
+            "\n\n",
+            "\n".join(lines),
+            "\n\n",
+            Bold("Последние события"),
+            "\n",
+            "\n".join(recent) if recent else "Событий пока нет",
         )
         builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{_status('enabled')} Все",
+                callback_data=pack_callback(
+                    ROUTE_NOTIFICATIONS,
+                    ACTION_TOGGLE,
+                    rev=rev,
+                    payload="field=enabled",
+                ),
+            )
+        )
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{_status('system_enabled')} Системные",
+                callback_data=pack_callback(
+                    ROUTE_NOTIFICATIONS,
+                    ACTION_TOGGLE,
+                    rev=rev,
+                    payload="field=system_enabled",
+                ),
+            ),
+            InlineKeyboardButton(
+                text=f"{_status('transaction_enabled')} Tx beta",
+                callback_data=pack_callback(
+                    ROUTE_NOTIFICATIONS,
+                    ACTION_TOGGLE,
+                    rev=rev,
+                    payload="field=transaction_enabled",
+                ),
+            ),
+        )
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{_status('balance_enabled')} Баланс",
+                callback_data=pack_callback(
+                    ROUTE_NOTIFICATIONS,
+                    ACTION_TOGGLE,
+                    rev=rev,
+                    payload="field=balance_enabled",
+                ),
+            )
+        )
         builder.row(
             InlineKeyboardButton(
                 text=t(locale, "back"),

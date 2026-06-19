@@ -23,6 +23,22 @@ settings = get_settings()
 _transactions_refresh_inflight: dict[str, asyncio.Task] = {}
 _transactions_refresh_inflight_lock = asyncio.Lock()
 
+SUPPORTED_CEX_TRANSACTION_EXCHANGES = {
+    "binance",
+    "bingx",
+    "bitget",
+    "bitmart",
+    "bybit",
+    "coinex",
+    "gateio",
+    "htx",
+    "kucoin",
+    "mexc",
+    "okx",
+    "poloniex",
+    "xt",
+}
+
 
 class TransactionService:
     """Сервис для работы с транзакциями (вводы/выводы)"""
@@ -46,6 +62,14 @@ class TransactionService:
                 continue
             exchange_code = str(integration.exchange_code or "").strip().lower()
             if not exchange_code:
+                continue
+            if exchange_code not in SUPPORTED_CEX_TRANSACTION_EXCHANGES:
+                continue
+            service_status = await self.status_repo.get_status(
+                exchange_code,
+                organization_id=self.organization_id,
+            )
+            if service_status is not None and not bool(service_status.is_healthy):
                 continue
             targets.append(
                 {
@@ -194,11 +218,14 @@ class TransactionService:
 
         await self.entitlements.ensure_refresh_interval_for_organization(self.organization_id)
 
-        targets = await self._load_active_exchange_targets()
-        if exchange_ids is not None:
-            targets = [target for target in targets if target["exchange_id"] in exchange_ids]
+        explicit_exchange_ids = [
+            str(exchange_id).strip().lower()
+            for exchange_id in (exchange_ids or [])
+            if str(exchange_id).strip().lower() in SUPPORTED_CEX_TRANSACTION_EXCHANGES
+        ]
+        targets = [] if explicit_exchange_ids else await self._load_active_exchange_targets()
 
-        if not targets:
+        if not explicit_exchange_ids and not targets:
             return TransactionsRefreshResponse(
                 status="ok",
                 message="No active exchange integrations to refresh",
@@ -209,7 +236,8 @@ class TransactionService:
             )
 
         target_keys = sorted(
-            f"{target['exchange_id']}:{target['integration_id']}" for target in targets
+            explicit_exchange_ids
+            or [f"{target['exchange_id']}:{target['integration_id']}" for target in targets]
         )
         inflight_key = f"org:{self.organization_id}:since:{since_hours}:targets:{','.join(target_keys)}"
 
@@ -221,17 +249,37 @@ class TransactionService:
             checked_services = []
             failed_services = []
 
-            for target in targets:
+            if explicit_exchange_ids:
+                results_by_exchange = await ccxt_manager.fetch_transactions_all_exchanges(
+                    explicit_exchange_ids,
+                    since=since,
+                    limit=100,
+                )
+                iterable_targets = [
+                    {
+                        "exchange_id": exchange_id,
+                        "integration_id": None,
+                        "result": result,
+                    }
+                    for exchange_id, result in results_by_exchange.items()
+                ]
+            else:
+                iterable_targets = targets
+
+            for target in iterable_targets:
                 exchange_id = str(target["exchange_id"])
-                integration_id = int(target["integration_id"])
+                integration_id = target.get("integration_id")
                 try:
-                    config_override = await self._load_cex_config_override(integration_id)
-                    result = await ccxt_manager.fetch_all_transactions(
-                        exchange_id,
-                        since=since,
-                        limit=100,
-                        config_override=config_override,
-                    )
+                    if "result" in target:
+                        result = target["result"]
+                    else:
+                        config_override = await self._load_cex_config_override(int(integration_id))
+                        result = await ccxt_manager.fetch_all_transactions(
+                            exchange_id,
+                            since=since,
+                            limit=100,
+                            config_override=config_override,
+                        )
                 except Exception as fetch_exc:
                     result = fetch_exc
 

@@ -629,6 +629,22 @@ async def handle_callback(
             )
             return
 
+        if command.route == ROUTE_NOTIFICATIONS and command.action == ACTION_TOGGLE:
+            field = str(payload.get("field") or "")
+            if field in {"enabled", "system_enabled", "transaction_enabled", "balance_enabled"}:
+                await screen_service.update_notification_toggle(field=field)
+            await _render_and_edit(
+                callback,
+                state=state,
+                screen_service=screen_service,
+                nav_service=nav_service,
+                route=command.route,
+                payload=ui_state.payload,
+                source_route=ui_state.source_route,
+                push_current=False,
+            )
+            return
+
         if command.route == ROUTE_SETTINGS and command.action == ACTION_TOGGLE:
             await screen_service.update_hide_small(user_id=callback.from_user.id)
             await _render_and_edit(

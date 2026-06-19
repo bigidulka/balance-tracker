@@ -72,6 +72,127 @@ class TelegramIdentity(Base):
     )
 
 
+class NotificationSetting(Base):
+    __tablename__ = "notification_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    enabled = Column(Boolean, nullable=False, default=True)
+    system_enabled = Column(Boolean, nullable=False, default=True)
+    transaction_enabled = Column(Boolean, nullable=False, default=False)
+    balance_enabled = Column(Boolean, nullable=False, default=False)
+    min_balance_delta_usd = Column(Float, nullable=False, default=10.0)
+    min_balance_delta_percent = Column(Float, nullable=False, default=5.0)
+    muted_services = Column(JSON, nullable=False, default=list)
+    channels = Column(JSON, nullable=False, default=lambda: ["telegram"])
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_notification_settings_org_user", "organization_id", "user_id", unique=True),
+    )
+
+
+class NotificationCursor(Base):
+    __tablename__ = "notification_cursors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cursor_type = Column(String(64), nullable=False)
+    source_key = Column(String(255), nullable=False)
+    cursor_value = Column(String(255), nullable=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_notification_cursors_unique",
+            "organization_id",
+            "user_id",
+            "cursor_type",
+            "source_key",
+            unique=True,
+        ),
+    )
+
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    integration_id = Column(
+        Integer,
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    event_type = Column(String(64), nullable=False, index=True)
+    severity = Column(String(32), nullable=False, default="info", index=True)
+    source = Column(String(128), nullable=False, default="system", index=True)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    payload = Column(JSON, nullable=False, default=dict)
+    dedupe_key = Column(String(255), nullable=False)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    error_message = Column(Text, nullable=True)
+    send_after_at = Column(DateTime(timezone=True), nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_notification_events_unique_dedupe",
+            "organization_id",
+            "user_id",
+            "dedupe_key",
+            unique=True,
+        ),
+        Index("ix_notification_events_dispatch", "status", "send_after_at", "created_at"),
+        Index("ix_notification_events_org_user_created", "organization_id", "user_id", "created_at"),
+    )
+
+
 class OrganizationMembership(Base):
     __tablename__ = "organization_memberships"
 

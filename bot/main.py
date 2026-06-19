@@ -16,7 +16,7 @@ BOT_PROXY = os.getenv("BOT_PROXY", "").strip()
 from bot.handlers import router
 from bot.api_client import api_client
 from bot.middlewares.context import ContextMiddleware
-from bot.notifications import notification_loop, transaction_notification_loop
+from bot.notifications import notification_event_loop, notification_loop, transaction_notification_loop
 from bot.services.runtime import close_runtime
 
 logging.basicConfig(
@@ -70,14 +70,16 @@ async def main():
 
     logger.info("Starting bot...")
 
-    # Notifications temporarily disabled — feature under development.
-    # _notification_task = asyncio.create_task(
-    #     notification_loop(bot, interval=settings.notification_interval)
-    # )
-    # logger.info(
-    #     "Balance notification loop started (interval: %ss)",
-    #     settings.notification_interval,
-    # )
+    if settings.enable_notification_loop:
+        _notification_task = asyncio.create_task(
+            notification_event_loop(bot, interval=settings.notification_interval)
+        )
+        logger.info(
+            "Notification event loop started (interval: %ss)",
+            settings.notification_interval,
+        )
+
+    # Legacy balance-delta notifications remain disabled; event outbox loop above is used.
 
     # Start transaction notification background task (check every 2 minutes)
     # _tx_notification_task = asyncio.create_task(
