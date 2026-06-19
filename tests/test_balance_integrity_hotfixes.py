@@ -203,6 +203,87 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(latest.total_usd, 1000)
         self.assertEqual(len(history), 1)
 
+    async def test_wallet_outlier_accepts_value_with_recent_history_support(self):
+        async with self.session_maker() as session:
+            repo = BalanceRepository(session)
+            for total in [6651.3, 6651.31, 6651.32, 1500.0]:
+                await repo.save_balance(
+                    service="evm_0xabc",
+                    assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                    total_usd=total,
+                    actual=True,
+                    accounts=[
+                        AccountBalanceSchema(
+                            account_type="spot",
+                            assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                            total_usd=total,
+                        )
+                    ],
+                    organization_id=1,
+                    integration_id=1,
+                )
+
+            service = BalanceService(session=session, organization_id=1)
+            restored = ServiceBalanceSchema(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                        total_usd=6651.30,
+                    )
+                ],
+                total_usd=6651.30,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+            saved = await service.fetch_and_save_balance(
+                "evm_0xabc",
+                restored,
+                integration_id=1,
+            )
+
+        self.assertAlmostEqual(saved.total_usd, 6651.30, places=2)
+
+    async def test_wallet_large_drop_without_history_support_rejected(self):
+        async with self.session_maker() as session:
+            repo = BalanceRepository(session)
+            await repo.save_balance(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                total_usd=6651.30,
+                actual=True,
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                        total_usd=6651.30,
+                    )
+                ],
+                organization_id=1,
+                integration_id=1,
+            )
+
+            service = BalanceService(session=session, organization_id=1)
+            low = ServiceBalanceSchema(
+                service="evm_0xabc",
+                assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                accounts=[
+                    AccountBalanceSchema(
+                        account_type="spot",
+                        assets=[AssetSchema(coin="USDC", amount=1, value_usd=1)],
+                        total_usd=25.0,
+                    )
+                ],
+                total_usd=25.0,
+                updated_at=datetime.now(timezone.utc),
+                actual=True,
+            )
+
+            with self.assertRaisesRegex(BalanceIntegrityError, "outlier"):
+                await service.fetch_and_save_balance("evm_0xabc", low, integration_id=1)
+
     async def test_balance_service_rejects_outlier_against_stale_previous(self):
         async with self.session_maker() as session:
             repo = BalanceRepository(session)

@@ -74,6 +74,23 @@ def _allows_portfolio_total_mismatch(service: str) -> bool:
     return normalized.startswith(("debank_sdk_", "evm_"))
 
 
+def _is_wallet_portfolio_service(service: str) -> bool:
+    normalized = (service or "").strip().lower()
+    return normalized.startswith(("debank_sdk_", "evm_", "sol_", "tron_", "ton_", "sui_"))
+
+
+def _has_recent_history_support(current_total: float, recent_totals: list[float]) -> bool:
+    if current_total <= 0 or not recent_totals:
+        return False
+    tolerance = max(100.0, abs(current_total) * 0.10)
+    matches = [
+        value
+        for value in recent_totals
+        if value > 0 and abs(value - current_total) <= tolerance
+    ]
+    return len(matches) >= 3
+
+
 def validate_balance_shape(balance: ServiceBalanceSchema) -> None:
     if not settings.balance_integrity_enabled:
         return
@@ -146,7 +163,24 @@ async def validate_balance_for_persistence(
         return
 
     relative_change = delta / max(previous_total, 1.0)
-    if relative_change > settings.balance_integrity_outlier_max_relative_change:
+    is_wallet_service = _is_wallet_portfolio_service(service)
+    suspicious_large_change = (
+        relative_change > settings.balance_integrity_outlier_max_relative_change
+    )
+    suspicious_wallet_drop = (
+        is_wallet_service
+        and previous_total >= 1000.0
+        and current_total < previous_total * 0.5
+    )
+    if suspicious_large_change or suspicious_wallet_drop:
+        recent_totals = await repo.get_recent_history_totals(
+            service=service,
+            organization_id=organization_id,
+            integration_id=integration_id,
+            limit=30,
+        )
+        if is_wallet_service and _has_recent_history_support(current_total, recent_totals):
+            return
         raise BalanceIntegrityError(
             f"Balance outlier for {service}: previous={previous_total:.2f} "
             f"current={current_total:.2f} delta={delta:.2f} "

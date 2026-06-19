@@ -42,6 +42,28 @@ class BalanceRepository:
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_recent_history_totals(
+        self,
+        *,
+        service: str,
+        organization_id: int = DEFAULT_ORGANIZATION_ID,
+        integration_id: int | None = None,
+        limit: int = 30,
+    ) -> list[float]:
+        predicates = [
+            BalanceHistory.organization_id == organization_id,
+            BalanceHistory.service == service,
+        ]
+        if integration_id is not None:
+            predicates.append(BalanceHistory.integration_id == integration_id)
+        result = await self.session.execute(
+            select(BalanceHistory.total_usd)
+            .where(and_(*predicates))
+            .order_by(desc(BalanceHistory.created_at), desc(BalanceHistory.id))
+            .limit(max(1, int(limit)))
+        )
+        return [float(value or 0.0) for value in result.scalars().all()]
+
     async def get_all_latest_balances(
         self, organization_id: int = DEFAULT_ORGANIZATION_ID
     ) -> list[Balance]:
