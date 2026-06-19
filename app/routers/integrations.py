@@ -24,6 +24,7 @@ from app.services.integrations.create_validation import (
 )
 from app.services.crypto_bot_app_client import crypto_bot_app_client
 from app.services.logging_context import get_request_logger, request_log_context
+from app.services.integration_keys import service_key_for_integration
 from app.services.metrics_service import metrics_service
 
 logger = logging.getLogger(__name__)
@@ -31,11 +32,7 @@ router = APIRouter(prefix="/api/v1/integrations", tags=["integrations"])
 
 
 def _service_key_for_integration(integration) -> str:
-    if integration.kind == "cex" and integration.exchange_code:
-        return str(integration.exchange_code).strip().lower()
-    if integration.chain:
-        return str(integration.chain).strip().lower()
-    return str(integration.provider or "").strip().lower()
+    return service_key_for_integration(integration)
 
 
 def _health_status(integration, service_status=None, latest_job=None) -> str:

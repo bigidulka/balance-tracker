@@ -19,6 +19,7 @@ from app.services.balance_integrity import (
 )
 from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 from app.services.entitlements_service import EntitlementsService
+from app.services.integration_keys import service_key_for_integration
 from app.services.integrations import get_provider
 
 settings = get_settings()
@@ -371,7 +372,26 @@ class SyncJobService:
             return None
         return await self.run_claimed_job(job)
 
+    async def _mark_integration_unhealthy(
+        self,
+        integration: Integration | None,
+        organization_id: int,
+        error: str,
+    ) -> None:
+        if integration is None:
+            return
+        service_key = service_key_for_integration(integration)
+        if not service_key:
+            return
+        await self.status_repo.update_status(
+            service_key,
+            is_healthy=False,
+            last_error=error[:500],
+            organization_id=organization_id,
+        )
+
     async def run_claimed_job(self, job: SyncJob) -> SyncJob:
+        integration: Integration | None = None
         try:
             payload = dict(job.payload or {})
             if payload.get("enforce_refresh_interval_at_run"):
@@ -427,6 +447,12 @@ class SyncJobService:
             job.error_message = (
                 refresh_result.message if job.status == "failed" else None
             )
+            if job.status == "failed":
+                await self._mark_integration_unhealthy(
+                    integration,
+                    job.organization_id,
+                    job.error_message or "Refresh failed",
+                )
         except HTTPException as exc:
             job.status = "failed"
             detail = self._attach_retry_metadata(exc.detail)
@@ -442,6 +468,11 @@ class SyncJobService:
             job.status = "failed"
             job.error_message = str(exc)
             job.result = {}
+            await self._mark_integration_unhealthy(
+                integration,
+                job.organization_id,
+                job.error_message or "Refresh failed",
+            )
         finally:
             job.finished_at = datetime.now(timezone.utc)
             await self.session.commit()

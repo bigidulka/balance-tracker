@@ -1,9 +1,11 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
+from app.models.balance import Integration, Organization, SyncJob
 from app.repositories.balance import BalanceRepository, ServiceStatusRepository
 from app.schemas.balance import AccountBalanceSchema, AssetSchema, ServiceBalanceSchema
 from app.services.balance_integrity import BalanceIntegrityError, validate_balance_shape
@@ -275,6 +277,90 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(BalanceIntegrityError, "Empty positive"):
                 await service.fetch_and_save_balance("binance", empty_positive)
+
+    async def test_sync_job_provider_exception_marks_cex_unhealthy(self):
+        class FailingProvider:
+            async def refresh(self, organization_id, integration, payload=None):
+                raise RuntimeError("401, message='Unauthorized'")
+
+        async with self.session_maker() as session:
+            org = Organization(name="Org", slug="org")
+            session.add(org)
+            await session.flush()
+            integration = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="OKX",
+                kind="cex",
+                exchange_code="okx",
+                account_ref="main",
+                is_active=True,
+            )
+            session.add(integration)
+            await session.flush()
+            job = SyncJob(
+                organization_id=org.id,
+                integration_id=integration.id,
+                job_type="refresh",
+                status="queued",
+                payload={},
+                result={},
+            )
+            session.add(job)
+            await session.commit()
+
+            with patch("app.services.sync_job_service.get_provider", return_value=FailingProvider()):
+                updated = await SyncJobService(session).run_job(job.id)
+
+            status = await ServiceStatusRepository(session).get_status("okx", org.id)
+
+        self.assertEqual(updated.status, "failed")
+        self.assertIsNotNone(status)
+        self.assertFalse(status.is_healthy)
+        self.assertIn("Unauthorized", status.last_error)
+
+    async def test_sync_job_provider_failed_result_marks_cex_unhealthy(self):
+        from app.services.integrations.provider import ProviderRefreshResult
+
+        class FailedProvider:
+            async def refresh(self, organization_id, integration, payload=None):
+                return ProviderRefreshResult(status="failed", message="403 Forbidden")
+
+        async with self.session_maker() as session:
+            org = Organization(name="Org 2", slug="org-2")
+            session.add(org)
+            await session.flush()
+            integration = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="BitMart",
+                kind="cex",
+                exchange_code="bitmart",
+                account_ref="main",
+                is_active=True,
+            )
+            session.add(integration)
+            await session.flush()
+            job = SyncJob(
+                organization_id=org.id,
+                integration_id=integration.id,
+                job_type="refresh",
+                status="queued",
+                payload={},
+                result={},
+            )
+            session.add(job)
+            await session.commit()
+
+            with patch("app.services.sync_job_service.get_provider", return_value=FailedProvider()):
+                updated = await SyncJobService(session).run_job(job.id)
+
+            status = await ServiceStatusRepository(session).get_status("bitmart", org.id)
+
+        self.assertEqual(updated.status, "failed")
+        self.assertIsNotNone(status)
+        self.assertFalse(status.is_healthy)
+        self.assertEqual(status.last_error, "403 Forbidden")
 
     async def test_sync_job_persist_rejects_invalid_balance_and_marks_unhealthy(self):
         async with self.session_maker() as session:
