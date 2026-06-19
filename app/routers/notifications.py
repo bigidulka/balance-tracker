@@ -137,7 +137,11 @@ async def generate_notification_events(
                 refresh_result = await TransactionService(
                     db,
                     organization_id=organization_id,
-                ).refresh_transactions(since_hours=24)
+                ).refresh_transactions(
+                    since_hours=24,
+                    include_cex=False,
+                    include_dex=True,
+                )
                 transaction_refresh = {
                     "status": refresh_result.status,
                     "new_transactions": refresh_result.new_transactions,

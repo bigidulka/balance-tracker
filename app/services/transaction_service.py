@@ -281,22 +281,25 @@ class TransactionService:
         self,
         exchange_ids: Optional[list[str]] = None,
         since_hours: int = 24 * 7,  # По умолчанию за последнюю неделю
+        include_cex: bool = True,
+        include_dex: bool = True,
     ) -> TransactionsRefreshResponse:
-        """Обновить транзакции со всех бирж"""
+        """Обновить транзакции со всех бирж/кошельков."""
 
         await self.entitlements.ensure_refresh_interval_for_organization(self.organization_id)
 
         explicit_exchange_ids = [
             str(exchange_id).strip().lower()
             for exchange_id in (exchange_ids or [])
-            if str(exchange_id).strip().lower() in SUPPORTED_CEX_TRANSACTION_EXCHANGES
+            if include_cex
+            and str(exchange_id).strip().lower() in SUPPORTED_CEX_TRANSACTION_EXCHANGES
         ]
         targets = []
         if not explicit_exchange_ids:
-            targets = [
-                *(await self._load_active_exchange_targets()),
-                *(await self._load_active_dex_targets()),
-            ]
+            if include_cex:
+                targets.extend(await self._load_active_exchange_targets())
+            if include_dex:
+                targets.extend(await self._load_active_dex_targets())
 
         if not explicit_exchange_ids and not targets:
             return TransactionsRefreshResponse(
