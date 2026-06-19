@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -318,6 +319,52 @@ class BalanceIntegrityHotfixTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(status)
         self.assertFalse(status.is_healthy)
         self.assertIn("Unauthorized", status.last_error)
+
+    async def test_sync_job_provider_timeout_marks_cex_unhealthy(self):
+        class SlowProvider:
+            async def refresh(self, organization_id, integration, payload=None):
+                await asyncio.sleep(10)
+
+        async with self.session_maker() as session:
+            org = Organization(name="Org Timeout", slug="org-timeout")
+            session.add(org)
+            await session.flush()
+            integration = Integration(
+                organization_id=org.id,
+                provider="ccxt",
+                name="Gate",
+                kind="cex",
+                exchange_code="gateio",
+                account_ref="main",
+                is_active=True,
+            )
+            session.add(integration)
+            await session.flush()
+            job = SyncJob(
+                organization_id=org.id,
+                integration_id=integration.id,
+                job_type="refresh",
+                status="queued",
+                payload={},
+                result={},
+            )
+            session.add(job)
+            await session.commit()
+
+            with (
+                patch("app.services.sync_job_service.get_provider", return_value=SlowProvider()),
+                patch("app.services.sync_job_service.settings.sync_job_provider_timeout_seconds", 0.01),
+            ):
+                updated = await SyncJobService(session).run_job(job.id)
+
+            status = await ServiceStatusRepository(session).get_status("gateio", org.id)
+
+        self.assertEqual(updated.status, "failed")
+        self.assertEqual(updated.result["code"], "refresh_provider_timeout")
+        self.assertIn("timeout", updated.error_message.lower())
+        self.assertIsNotNone(status)
+        self.assertFalse(status.is_healthy)
+        self.assertIn("timeout", status.last_error.lower())
 
     async def test_sync_job_provider_failed_result_marks_cex_unhealthy(self):
         from app.services.integrations.provider import ProviderRefreshResult

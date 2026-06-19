@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -421,11 +422,19 @@ class SyncJobService:
                 if secret.key_name and secret.secret_value:
                     payload[secret.key_name] = secret.secret_value
 
-            refresh_result = await provider.refresh(
+            refresh_coro = provider.refresh(
                 organization_id=job.organization_id,
                 integration=integration,
                 payload=payload,
             )
+            provider_timeout = float(settings.sync_job_provider_timeout_seconds or 0.0)
+            if provider_timeout > 0:
+                refresh_result = await asyncio.wait_for(
+                    refresh_coro,
+                    timeout=provider_timeout,
+                )
+            else:
+                refresh_result = await refresh_coro
 
             await self._persist_balance_from_refresh_result(
                 organization_id=job.organization_id,
@@ -464,6 +473,16 @@ class SyncJobService:
                 "retry_after_seconds": detail.get("retry_after_seconds"),
                 "min_refresh_interval_seconds": detail.get("min_refresh_interval_seconds"),
             }
+        except asyncio.TimeoutError:
+            job.status = "failed"
+            timeout = float(settings.sync_job_provider_timeout_seconds or 0.0)
+            job.error_message = f"Refresh provider timeout after {timeout:.1f}s"
+            job.result = {"status": "failed", "code": "refresh_provider_timeout"}
+            await self._mark_integration_unhealthy(
+                integration,
+                job.organization_id,
+                job.error_message,
+            )
         except Exception as exc:
             job.status = "failed"
             job.error_message = str(exc)

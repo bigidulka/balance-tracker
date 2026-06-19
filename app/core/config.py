@@ -130,6 +130,7 @@ class Settings(BaseSettings):
     refresh_scheduler_min_interval_seconds: int = Field(default=60)
     refresh_scheduler_batch_size: int = Field(default=20)
     sync_job_running_timeout_seconds: int = Field(default=900)
+    sync_job_provider_timeout_seconds: float = Field(default=120.0)
 
     # Legacy aliases kept for backward compatibility during rollout.
     enable_legacy_background_refresh_loop: Optional[bool] = Field(default=None)
