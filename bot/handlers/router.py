@@ -272,7 +272,6 @@ async def handle_callback(
         )
         return
 
-    ui_state = await ui_state_repo.ensure_anchor(state, callback.message.message_id)
     command = parse_callback(callback.data)
     if command is None:
         await callback.answer()
@@ -284,6 +283,26 @@ async def handle_callback(
         )
         return
 
+    payload = parse_payload_jsonish(command.payload)
+    if (
+        command.source == "broadcast"
+        and command.action == ACTION_OPEN
+        and command.route in (ROUTE_INTEGRATIONS, ROUTE_PLAN)
+    ):
+        await ui_state_repo.save_anchor(state, callback.message.message_id)
+        await _render_and_edit(
+            callback,
+            state=state,
+            screen_service=screen_service,
+            nav_service=nav_service,
+            route=command.route,
+            payload=payload,
+            source_route=ROUTE_MAIN,
+            push_current=False,
+        )
+        return
+
+    ui_state = await ui_state_repo.ensure_anchor(state, callback.message.message_id)
     if (
         ui_state.anchor_message_id
         and callback.message.message_id != ui_state.anchor_message_id
@@ -306,8 +325,6 @@ async def handle_callback(
             nav_service=nav_service,
         )
         return
-
-    payload = parse_payload_jsonish(command.payload)
 
     # Answer callback IMMEDIATELY for all navigation actions to reduce perceived latency
     # (user sees instant response, message edits come shortly after)
