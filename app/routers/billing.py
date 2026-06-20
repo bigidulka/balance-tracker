@@ -241,6 +241,15 @@ async def create_payment_invoice(
                 plan_code=target_plan.code,
                 description=f"Plan switched to {target_plan.name}",
             )
+    if not settings.crypto_bot_api_token:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "payment_provider_unavailable",
+                "message": "Payment provider is not configured",
+            },
+        )
+
     service = CryptoBotService(db)
     try:
         if payload.invoice_type == "plan_purchase":

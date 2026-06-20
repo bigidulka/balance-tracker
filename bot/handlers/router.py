@@ -453,7 +453,16 @@ async def handle_callback(
 
 
 
-            created = await screen_service.create_plan_invoice(plan_code, price)
+            try:
+                created = await screen_service.create_plan_invoice(plan_code, price)
+            except Exception as exc:
+                logger.warning("Failed to create plan invoice for %s: %s", plan_code, exc)
+                await callback.answer(
+                    "Оплата временно недоступна. Попробуйте позже или напишите администратору.",
+                    show_alert=True,
+                )
+                return
+
             invoice_id = (
                 parse_payload_int(created.get("id"), default=-1)
                 if isinstance(created, dict)
