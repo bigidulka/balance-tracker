@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.balance import Integration, Plan, Subscription, SyncJob
+from app.services.billing_service import BillingService
 
 
 def _make_policy(
@@ -349,6 +350,7 @@ class EntitlementsService:
         await self.session.commit()
 
     async def _get_active_plan(self, organization_id: int) -> Plan:
+        await BillingService(self.session).reconcile_subscription(organization_id)
         query = (
             select(Plan)
             .join(Subscription, Subscription.plan_id == Plan.id)

@@ -129,11 +129,23 @@ async def get_current_subscription(
     await service.ensure_default_plans()
     await service.ensure_default_subscription(identity.organization.id)
     entitlements = await service.get_effective_entitlements(identity.organization.id)
+    billing = BillingService(db)
+    subscription = await billing.get_active_subscription(identity.organization.id)
     ledger = LedgerService(db)
     balance = await ledger.get_balance(identity.organization.id)
     entries = await ledger.list_entries(identity.organization.id, limit=5)
     return CurrentSubscriptionResponse(
         **entitlements,
+        subscription={
+            "id": subscription.id if subscription else None,
+            "status": subscription.status if subscription else None,
+            "current_period_end": subscription.current_period_end.isoformat()
+            if subscription and subscription.current_period_end
+            else None,
+            "cancel_at_period_end": bool(subscription.cancel_at_period_end)
+            if subscription
+            else False,
+        },
         wallet={
             "currency": "USD",
             "available": balance,

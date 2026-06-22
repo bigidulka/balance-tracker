@@ -299,6 +299,8 @@ class CryptoBotService:
                     switched = await billing.switch_subscription_plan(
                         organization_id=invoice.organization_id,
                         plan_code=plan_code,
+                        paid_period_days=BillingService.MONTHLY_PERIOD_DAYS,
+                        preserve_period_end=False,
                     )
                     billing.add_billing_event(
                         organization_id=invoice.organization_id,

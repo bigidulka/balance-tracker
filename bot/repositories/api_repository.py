@@ -78,10 +78,12 @@ class ApiRepository:
             invoice_type=invoice_type,
             plan_code=plan_code,
         )
+        self.invalidate("billing_current")
         return payload if isinstance(payload, dict) else {}
 
     async def switch_billing_plan(self, plan_code: str) -> dict[str, Any]:
         payload = await api_client.switch_billing_plan(plan_code)
+        self.invalidate("billing_current", "capabilities")
         return payload if isinstance(payload, dict) else {}
 
     async def refresh_payment_invoice(self, invoice_id: int) -> dict[str, Any]:

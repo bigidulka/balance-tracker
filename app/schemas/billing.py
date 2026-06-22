@@ -21,6 +21,7 @@ class BillingPlansResponse(BaseModel):
 
 class CurrentSubscriptionResponse(BaseModel):
     plan: dict[str, Any]
+    subscription: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
     limits: dict[str, Any] = Field(default_factory=dict)
     throttling: dict[str, Any] = Field(default_factory=dict)

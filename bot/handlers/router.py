@@ -443,15 +443,39 @@ async def handle_callback(
                 return
 
             price = float(selected_plan.get("price_monthly") or 0.0)
-            if price <= 0:
-                # Free-tier switching is disabled — user must pay
-                await callback.answer(
-                    "Payment required to change plan",
-                    show_alert=True,
+            current_plan_payload = next(
+                (
+                    item
+                    for item in plans
+                    if isinstance(item, dict)
+                    and str(item.get("code") or "").strip().lower() == current_plan_code
+                ),
+                {},
+            )
+            current_price = float(current_plan_payload.get("price_monthly") or 0.0)
+
+            if price <= current_price:
+                try:
+                    await screen_service.switch_plan(plan_code)
+                except Exception as exc:
+                    logger.warning("Failed to switch plan to %s: %s", plan_code, exc)
+                    await callback.answer(
+                        "Не удалось переключить тариф. Попробуйте позже.",
+                        show_alert=True,
+                    )
+                    return
+                await callback.answer("Тариф переключён")
+                await _render_and_edit(
+                    callback,
+                    state=state,
+                    screen_service=screen_service,
+                    nav_service=nav_service,
+                    route=ROUTE_PLAN,
+                    payload={},
+                    source_route=ui_state.source_route,
+                    push_current=False,
                 )
                 return
-
-
 
             try:
                 created = await screen_service.create_plan_invoice(plan_code, price)

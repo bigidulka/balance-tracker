@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,7 @@ from app.routers.billing import billing_webhook, get_current_subscription, list_
 from app.schemas.billing import CreateInvoiceRequest, SwitchPlanRequest
 from app.services.billing_service import BillingService
 from app.services.crypto_bot_service import CryptoBotService
+from app.services.ledger_service import LedgerService
 
 
 class BillingContractsTests(unittest.IsolatedAsyncioTestCase):
@@ -45,7 +47,7 @@ class BillingContractsTests(unittest.IsolatedAsyncioTestCase):
 
             current = await get_current_subscription(db=session, identity=identity)
             self.assertEqual(
-                {"plan", "policy", "limits", "throttling", "background", "usage", "capabilities", "wallet", "last_refresh_at"},
+                {"plan", "subscription", "policy", "limits", "throttling", "background", "usage", "capabilities", "wallet", "last_refresh_at"},
                 set(current.model_dump().keys()),
             )
             self.assertIn("max_cex_accounts", current.limits)
@@ -67,6 +69,85 @@ class BillingContractsTests(unittest.IsolatedAsyncioTestCase):
                 set(response.model_dump().keys()),
             )
             self.assertEqual(response.plan_code, "pro")
+
+    async def test_downgrade_preserves_period_end(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Downgrade Org", slug="downgrade-org")
+            session.add(org)
+            pro = Plan(code="pro", name="Pro", price_monthly=20.0, currency="USD", is_active=True)
+            low = Plan(code="low", name="Low", price_monthly=5.0, currency="USD", is_active=True)
+            session.add_all([pro, low])
+            await session.flush()
+            period_end = datetime.now(timezone.utc) + timedelta(days=12)
+            session.add(
+                Subscription(
+                    organization_id=org.id,
+                    plan_id=pro.id,
+                    status="active",
+                    current_period_end=period_end,
+                )
+            )
+            await session.commit()
+
+            changed = await BillingService(session).switch_subscription_plan(
+                organization_id=org.id,
+                plan_code="low",
+            )
+            self.assertTrue(changed)
+            active = await BillingService(session).get_active_subscription(org.id)
+            self.assertIsNotNone(active)
+            assert active is not None
+            self.assertEqual(active.plan_id, low.id)
+            self.assertEqual(
+                BillingService._normalize_datetime(active.current_period_end),
+                period_end,
+            )
+
+    async def test_auto_renew_debits_balance_or_downgrades(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Renew Org", slug="renew-org")
+            session.add(org)
+            free = Plan(code="free", name="Free", price_monthly=0.0, currency="USD", is_active=True)
+            medium = Plan(code="medium", name="Medium", price_monthly=10.0, currency="USD", is_active=True)
+            session.add_all([free, medium])
+            await session.flush()
+            expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.add(
+                Subscription(
+                    organization_id=org.id,
+                    plan_id=medium.id,
+                    status="active",
+                    current_period_end=expired_at,
+                )
+            )
+            await LedgerService(session).add_entry(
+                organization_id=org.id,
+                entry_type="credit",
+                amount=10.0,
+                source_type="test",
+            )
+            await session.commit()
+
+            renewed = await BillingService(session).reconcile_subscription(org.id)
+            self.assertEqual(renewed["action"], "renewed")
+            self.assertAlmostEqual(await LedgerService(session).get_balance(org.id), 0.0)
+            active = await BillingService(session).get_active_subscription(org.id)
+            self.assertIsNotNone(active)
+            assert active is not None
+            assert active.current_period_end is not None
+            self.assertGreater(
+                BillingService._normalize_datetime(active.current_period_end),
+                datetime.now(timezone.utc),
+            )
+
+            active.current_period_end = datetime.now(timezone.utc) - timedelta(minutes=1)
+            await session.commit()
+            downgraded = await BillingService(session).reconcile_subscription(org.id)
+            self.assertEqual(downgraded["action"], "downgraded")
+            active_after = await BillingService(session).get_active_subscription(org.id)
+            self.assertIsNotNone(active_after)
+            assert active_after is not None
+            self.assertEqual(active_after.plan_id, free.id)
 
     async def test_plan_purchase_invoice_applies_subscription_once(self):
         async with self.session_maker() as session:
@@ -162,6 +243,11 @@ class BillingContractsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(active)
             assert active is not None
             self.assertEqual(active.plan_id, paid_plan.id)
+            self.assertIsNotNone(active.current_period_end)
+            self.assertGreater(
+                BillingService._normalize_datetime(active.current_period_end),
+                datetime.now(timezone.utc),
+            )
 
             repeat = await billing_webhook(
                 provider="cryptobot",
