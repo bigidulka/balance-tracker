@@ -68,6 +68,43 @@ def _access_denied_reason_text(reason: str) -> str:
     return reason
 
 
+def _exception_status(exc: Exception) -> int | None:
+    status = getattr(exc, "status", None)
+    if isinstance(status, int):
+        return status
+    return None
+
+
+def _exception_retry_after(exc: Exception) -> int:
+    headers = getattr(exc, "headers", None)
+    if not headers:
+        return 0
+    try:
+        raw = headers.get("Retry-After")
+    except Exception:
+        return 0
+    try:
+        return max(0, int(float(raw or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _friendly_error_screen(exc: Exception, *, route: str, payload: dict[str, Any], keyboard: Any) -> RenderedScreen:
+    if _exception_status(exc) == 429:
+        return RenderedScreen(
+            route=route,
+            payload=payload,
+            text=msg.refresh_unavailable_text(_exception_retry_after(exc)),
+            keyboard=keyboard,
+        )
+    return RenderedScreen(
+        route=route,
+        payload=payload,
+        text=msg.error_text(exc),
+        keyboard=keyboard,
+    )
+
+
 async def _edit_message(message: Message, rendered: RenderedScreen) -> None:
     kwargs = msg.as_edit_kwargs(rendered.text, rendered.keyboard)
     try:
@@ -1011,20 +1048,19 @@ async def handle_callback(
     except Exception as exc:
         await callback.answer()
         try:
+            rendered = await screen_service.render(
+                route=ui_state.current_route,
+                payload=ui_state.payload,
+                user_id=callback.from_user.id,
+                rev=ui_state.revision,
+            )
             await _edit_message(
                 callback.message,
-                RenderedScreen(
+                _friendly_error_screen(
+                    exc,
                     route=ui_state.current_route,
                     payload=ui_state.payload,
-                    text=msg.error_text(exc),
-                    keyboard=(
-                        await screen_service.render(
-                            route=ui_state.current_route,
-                            payload=ui_state.payload,
-                            user_id=callback.from_user.id,
-                            rev=ui_state.revision,
-                        )
-                    ).keyboard,
+                    keyboard=rendered.keyboard,
                 ),
             )
         except Exception:
