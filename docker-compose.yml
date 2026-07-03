@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: balance-tracker-redis
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
 
   debank-sdk:
@@ -177,7 +177,7 @@ services:
       - API_TOKEN=${API_TOKEN:-}
       - API_ORG_ID=${API_ORG_ID:-}
       - BOT_ADMIN_USERS=${BOT_ADMIN_USERS:-6238100241}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       - ALLOWED_USERS=${ALLOWED_USERS:-}
       - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
       - DEBANK_SDK_URL=${DEBANK_SDK_URL:-http://debank-sdk:8080}
