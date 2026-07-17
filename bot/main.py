@@ -12,7 +12,7 @@ from redis.asyncio import Redis
 
 from bot.config import settings
 
-BOT_PROXY = os.getenv("BOT_PROXY", "").strip()
+OUTBOUND_PROXY_URL = os.getenv("OUTBOUND_PROXY_URL", "").strip()
 from bot.handlers import router
 from bot.api_client import api_client
 from bot.middlewares.context import ContextMiddleware
@@ -48,13 +48,13 @@ async def main():
         return
 
     session: AiohttpSession | None = None
-    if BOT_PROXY:
-        parsed_proxy = urlsplit(BOT_PROXY)
+    if OUTBOUND_PROXY_URL:
+        parsed_proxy = urlsplit(OUTBOUND_PROXY_URL)
         proxy_label = parsed_proxy.hostname or "configured"
         if parsed_proxy.port:
             proxy_label = f"{proxy_label}:{parsed_proxy.port}"
         logger.info("Using proxy for bot: %s", proxy_label)
-        session = AiohttpSession(proxy=BOT_PROXY)
+        session = AiohttpSession(proxy=OUTBOUND_PROXY_URL)
 
     bot = Bot(
         token=settings.bot_token,

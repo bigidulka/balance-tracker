@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-from collections import defaultdict
+from urllib.parse import quote
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,14 +67,27 @@ def _round(value: float | None) -> float | None:
     return round(float(value), 8)
 
 
+def _build_outbound_proxy_url(proxy: dict[str, Any]) -> str | None:
+    host = str(proxy.get("host", "")).strip()
+    port = str(proxy.get("port", "")).strip()
+    if not host or not port:
+        return None
+
+    username = str(proxy.get("username", "")).strip()
+    if not username:
+        return f"http://{host}:{port}"
+
+    password = str(proxy.get("password", ""))
+    return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+
+
 def _load_keys() -> list[str]:
     raw = json.loads(KEYS_PATH.read_text(encoding="utf-8"))
     proxy = raw.get("proxy_keys", {})
     if proxy:
-        os.environ["PROXY_HOST"] = str(proxy.get("host", ""))
-        os.environ["PROXY_PORT"] = str(proxy.get("port", ""))
-        os.environ["PROXY_USERNAME"] = str(proxy.get("username", ""))
-        os.environ["PROXY_PASSWORD"] = str(proxy.get("password", ""))
+        proxy_url = _build_outbound_proxy_url(proxy)
+        if proxy_url:
+            os.environ["OUTBOUND_PROXY_URL"] = proxy_url
 
     active: list[str] = []
     for json_key, exchange_id in EXCHANGE_ID_MAP.items():

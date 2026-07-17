@@ -32,10 +32,6 @@ def _url_is_internal(url: str) -> bool:
 
 
 def build_proxy_url() -> str | None:
-    explicit = getattr(settings, "outbound_proxy_url", "") or getattr(settings, "bot_proxy", "")
-    explicit = str(explicit).strip()
-    if explicit:
-        return explicit
     return settings.proxy_url
 
 

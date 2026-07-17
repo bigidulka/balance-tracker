@@ -29,11 +29,6 @@ class Settings(BaseSettings):
     cors_allow_origins: str = Field(default='["http://localhost:3000"]')
     default_org_id: int = Field(default=1)
 
-    proxy_host: str = Field(default="")
-    proxy_port: int = Field(default=3128)
-    proxy_username: str = Field(default="")
-    proxy_password: str = Field(default="")
-    bot_proxy: str = Field(default="")
     outbound_proxy_url: str = Field(default="")
 
     binance_api_key: str = Field(default="")
@@ -175,14 +170,8 @@ class Settings(BaseSettings):
 
     @property
     def proxy_url(self) -> Optional[str]:
-        explicit = str(self.outbound_proxy_url or self.bot_proxy or "").strip()
-        if explicit:
-            return explicit
-        if self.proxy_host and self.proxy_username:
-            return f"http://{self.proxy_username}:{self.proxy_password}@{self.proxy_host}:{self.proxy_port}"
-        elif self.proxy_host:
-            return f"http://{self.proxy_host}:{self.proxy_port}"
-        return None
+        value = self.outbound_proxy_url.strip()
+        return value or None
 
     @property
     def okx_wallet_accounts(self) -> list[str]:
