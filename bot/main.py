@@ -1,10 +1,7 @@
 import asyncio
 import logging
-import os
-from urllib.parse import urlsplit
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from bot.native_http_proxy import NativeHttpProxySession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -12,7 +9,6 @@ from redis.asyncio import Redis
 
 from bot.config import settings
 
-OUTBOUND_PROXY_URL = os.getenv("OUTBOUND_PROXY_URL", "").strip()
 from bot.handlers import router
 from bot.api_client import api_client
 from bot.middlewares.context import ContextMiddleware
@@ -47,19 +43,9 @@ async def main():
         logger.error("BOT_TOKEN is not set")
         return
 
-    session: NativeHttpProxySession | None = None
-    if OUTBOUND_PROXY_URL:
-        parsed_proxy = urlsplit(OUTBOUND_PROXY_URL)
-        proxy_label = parsed_proxy.hostname or "configured"
-        if parsed_proxy.port:
-            proxy_label = f"{proxy_label}:{parsed_proxy.port}"
-        logger.info("Using proxy for bot: %s", proxy_label)
-        session = NativeHttpProxySession(proxy=OUTBOUND_PROXY_URL)
-
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        session=session,
     )
     storage = await _build_storage()
     dp = Dispatcher(storage=storage)

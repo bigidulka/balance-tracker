@@ -179,6 +179,8 @@ services:
       - HIDE_SMALL_THRESHOLD=${HIDE_SMALL_THRESHOLD:-1.0}
       - DEBANK_SDK_URL=${DEBANK_SDK_URL:-http://debank-sdk:8080}
       - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
+      - PROXYCHAINS_ENABLED=1
+      - RESOLVE_HOSTS=api,redis,debank-sdk
     restart: unless-stopped
 
 volumes:
