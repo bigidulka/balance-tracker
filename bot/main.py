@@ -4,7 +4,7 @@ import os
 from urllib.parse import urlsplit
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
+from bot.native_http_proxy import NativeHttpProxySession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -47,14 +47,14 @@ async def main():
         logger.error("BOT_TOKEN is not set")
         return
 
-    session: AiohttpSession | None = None
+    session: NativeHttpProxySession | None = None
     if OUTBOUND_PROXY_URL:
         parsed_proxy = urlsplit(OUTBOUND_PROXY_URL)
         proxy_label = parsed_proxy.hostname or "configured"
         if parsed_proxy.port:
             proxy_label = f"{proxy_label}:{parsed_proxy.port}"
         logger.info("Using proxy for bot: %s", proxy_label)
-        session = AiohttpSession(proxy=OUTBOUND_PROXY_URL)
+        session = NativeHttpProxySession(proxy=OUTBOUND_PROXY_URL)
 
     bot = Bot(
         token=settings.bot_token,
