@@ -32,6 +32,8 @@ services:
       - DB_PATH=/data/tracker.db
       - CACHE_TTL_MS=30000
       - CHAIN_CACHE_TTL_MS=21600000
+      - PROXYCHAINS_ENABLED=1
+      - OUTBOUND_PROXY_URL=${OUTBOUND_PROXY_URL:-}
     volumes:
       - debank_sdk_data:/data
     healthcheck:

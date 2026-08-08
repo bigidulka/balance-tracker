@@ -1,8 +1,10 @@
 """
 SUI blockchain wallet balance service.
 
-Uses the public SUI JSON-RPC endpoint (https://fullnode.mainnet.sui.io).
-No API key required — the SUI Foundation operates free public nodes.
+Uses a SUI JSON-RPC endpoint (configurable via settings.sui_rpc_url).
+The SUI Foundation's own public fullnode retired JSON-RPC at the end of
+July 2026 in favor of GraphQL/gRPC, so this defaults to a third-party
+node (OKX nodeone) that still serves the legacy suix_* JSON-RPC methods.
 
 Balance strategy
 ----------------

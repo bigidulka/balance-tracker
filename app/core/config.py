@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     okx_wallet_legacy_enabled: bool = Field(default=False)
     debank_sdk_base_url: str = Field(default="http://debank-sdk:8080")
     debank_sdk_timeout_seconds: int = Field(default=30)
+    sui_rpc_url: str = Field(
+        default="https://wallet.okex.org/nodeone/sui/mainnet/v1/rpc/637f042f38a0a64dd59c954b8e6bd63de26d3e2e"
+    )
 
     balance_cache_ttl: int = Field(default=60)
     balance_cache_hard_ttl: int = Field(default=120)

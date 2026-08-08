@@ -172,7 +172,12 @@ async def validate_balance_for_persistence(
         and previous_total >= 1000.0
         and current_total < previous_total * 0.5
     )
-    if suspicious_large_change or suspicious_wallet_drop:
+    suspicious_wallet_spike = (
+        is_wallet_service
+        and previous_total >= 1000.0
+        and current_total > previous_total * 1.5
+    )
+    if suspicious_large_change or suspicious_wallet_drop or suspicious_wallet_spike:
         recent_totals = await repo.get_recent_history_totals(
             service=service,
             organization_id=organization_id,

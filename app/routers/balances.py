@@ -589,9 +589,7 @@ async def _get_dashboard_summary_uncached(
     pnl_7d_pct: float | None = None
     pnl_30d: float | None = None
     pnl_30d_pct: float | None = None
-    avg_daily_pnl: float | None = None
-    best_day_pnl: float | None = None
-    worst_day_pnl: float | None = None
+    pnl_includes_transfers: bool = False
 
     if include_metrics:
         try:
@@ -640,6 +638,15 @@ async def _get_dashboard_summary_uncached(
                 pnl_30d = current_balance - balance_30d_ago
                 pnl_30d_pct = pnl_30d / balance_30d_ago * 100
 
+            # PnL here is a raw balance delta with no cost-basis/transaction
+            # netting, so a deposit/withdrawal in-window shows up as fake
+            # profit/loss. Surface that instead of hiding it.
+            transfers_30d = await tx_repo.get_transaction_count(
+                organization_id=organization_id,
+                start_date=now - timedelta(days=30),
+            )
+            pnl_includes_transfers = transfers_30d > 0
+
         except Exception as exc:
             logger.warning("Failed to compute trader metrics: %r", exc)
 
@@ -678,9 +685,7 @@ async def _get_dashboard_summary_uncached(
         pnl_7d_pct=pnl_7d_pct,
         pnl_30d=pnl_30d,
         pnl_30d_pct=pnl_30d_pct,
-        avg_daily_pnl=avg_daily_pnl,
-        best_day_pnl=best_day_pnl,
-        worst_day_pnl=worst_day_pnl,
+        pnl_includes_transfers=pnl_includes_transfers,
     )
 
 

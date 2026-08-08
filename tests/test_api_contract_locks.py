@@ -163,9 +163,7 @@ class DashboardSummaryContractTests(unittest.IsolatedAsyncioTestCase):
                     "pnl_7d_pct",
                     "pnl_30d",
                     "pnl_30d_pct",
-                    "avg_daily_pnl",
-                    "best_day_pnl",
-                    "worst_day_pnl",
+                    "pnl_includes_transfers",
                 },
             )
 

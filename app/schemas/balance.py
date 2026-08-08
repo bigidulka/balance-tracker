@@ -118,9 +118,7 @@ class DashboardSummaryResponse(BaseModel):
     pnl_7d_pct: float | None = None
     pnl_30d: float | None = None
     pnl_30d_pct: float | None = None
-    avg_daily_pnl: float | None = None
-    best_day_pnl: float | None = None
-    worst_day_pnl: float | None = None
+    pnl_includes_transfers: bool = False
 
 
 
