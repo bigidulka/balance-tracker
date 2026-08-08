@@ -65,13 +65,26 @@ $proxy_row
 EOF
 
 hosts_file=${PROXYCHAINS_HOSTS_FILE:-/etc/hosts}
-if [ -n "${RESOLVE_HOSTS:-}" ] && [ -w "$hosts_file" ]; then
+refresh_resolve_hosts() {
+    [ -n "${RESOLVE_HOSTS:-}" ] || return 0
+    [ -w "$hosts_file" ] || return 0
+    pattern=$(printf '%s' "$RESOLVE_HOSTS" | tr ',' '|')
+    tmp_file="${hosts_file}.tmp.$$"
+    grep -vE "[[:space:]](${pattern})\$" "$hosts_file" > "$tmp_file" 2>/dev/null || : > "$tmp_file"
     for host in $(printf '%s' "$RESOLVE_HOSTS" | tr ',' ' '); do
         address=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 { print $1 }') || true
         if [ -n "$address" ]; then
-            printf '%s %s\n' "$address" "$host" >> "$hosts_file"
+            printf '%s %s\n' "$address" "$host" >> "$tmp_file"
         fi
     done
+    cat "$tmp_file" > "$hosts_file"
+    rm -f "$tmp_file"
+}
+
+refresh_resolve_hosts
+if [ -n "${RESOLVE_HOSTS:-}" ]; then
+    interval=${RESOLVE_HOSTS_REFRESH_SECONDS:-15}
+    ( while sleep "$interval"; do refresh_resolve_hosts; done ) &
 fi
 
 exec proxychains4 -f "$config_path" "$@"
