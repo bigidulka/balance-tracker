@@ -41,7 +41,7 @@ settings = get_settings()
 # Constants
 # ---------------------------------------------------------------------------
 
-_SUI_RPC_URL = "https://fullnode.mainnet.sui.io"
+_SUI_RPC_URL = settings.sui_rpc_url
 
 _SUI_MIST_PER_SUI = 1_000_000_000  # 1 SUI = 1e9 MIST
 
