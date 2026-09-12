@@ -55,7 +55,11 @@ class CCXTIntegrationProvider(IntegrationProvider):
         if not balance.actual:
             return ProviderRefreshResult(
                 status="failed",
-                message="Exchange returned no verified balance data",
+                message=(
+                    "Exchange returned partial balance data"
+                    if balance.accounts or balance.assets
+                    else "Exchange returned no verified balance data"
+                ),
                 data={
                     "organization_id": organization_id,
                     "integration_id": integration.id,

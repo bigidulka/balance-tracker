@@ -344,6 +344,52 @@ class QueuedCredentialBoundaryTests(unittest.IsolatedAsyncioTestCase):
         for value in ("queue-key", "queue-secret", "queue-password"):
             self.assertNotIn(value, serialized_result)
 
+    async def test_partial_balance_is_persisted_as_stale_before_job_fails(self):
+        async with self.session_maker() as session:
+            org = Organization(name="Partial balance", slug="partial-balance")
+            session.add(org)
+            await session.flush()
+            service = SyncJobService(session)
+            with self.assertRaisesRegex(ValueError, "Degraded balance payload"):
+                await service._persist_balance_from_refresh_result(
+                    org.id,
+                    {
+                        "balance": {
+                            "integration_id": 7,
+                            "service": "xt",
+                            "accounts": [
+                                {
+                                    "account_type": "spot",
+                                    "assets": [
+                                        {"coin": "USDT", "amount": 5, "value_usd": 5}
+                                    ],
+                                    "total_usd": 5,
+                                },
+                                {
+                                    "account_type": "usdt_futures",
+                                    "assets": [],
+                                    "total_usd": 0,
+                                    "error": "account balance unavailable",
+                                },
+                            ],
+                            "assets": [
+                                {"coin": "USDT", "amount": 5, "value_usd": 5}
+                            ],
+                            "total_usd": 5,
+                            "actual": False,
+                        }
+                    },
+                )
+            saved = await service.balance_repo.get_latest_balance(
+                "xt", org.id, integration_id=7
+            )
+
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        self.assertFalse(saved.actual)
+        self.assertEqual(saved.total_usd, 5)
+        self.assertEqual(saved.accounts[1]["error"], "account balance unavailable")
+
 
 class CCXTAggregationContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_aggregation_preserves_every_source_label_and_counts_each_once(self):

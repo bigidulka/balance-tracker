@@ -121,6 +121,11 @@ class SyncJobService:
                         if account.get("mirror_of")
                         else None
                     ),
+                    error=(
+                        str(account.get("error"))
+                        if account.get("error")
+                        else None
+                    ),
                 )
                 for account in (raw_balance.get("accounts") or [])
                 if isinstance(account, dict)
@@ -137,12 +142,27 @@ class SyncJobService:
             total_usd=float(raw_balance.get("total_usd") or 0.0),
             updated_at=datetime.now(timezone.utc),
             actual=actual,
+            warnings=[
+                str(warning)
+                for warning in (raw_balance.get("warnings") or [])
+                if isinstance(warning, str)
+            ],
         )
 
         if not balance.service:
             return
 
         if not balance.actual:
+            if balance.assets or balance.accounts:
+                await self.balance_repo.save_balance(
+                    service=balance.service,
+                    assets=balance.assets,
+                    total_usd=balance.total_usd,
+                    actual=False,
+                    accounts=balance.accounts,
+                    organization_id=organization_id,
+                    integration_id=balance.integration_id,
+                )
             await self.status_repo.update_status(
                 balance.service,
                 is_healthy=False,

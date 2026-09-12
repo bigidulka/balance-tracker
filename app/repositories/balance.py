@@ -127,6 +127,7 @@ class BalanceRepository:
                     (
                         str(row.get("account_type") or "spot"),
                         str(row.get("mirror_of") or ""),
+                        str(row.get("error") or ""),
                         round(float(row.get("total_usd", 0) or 0), 8),
                         assets_key,
                     )
