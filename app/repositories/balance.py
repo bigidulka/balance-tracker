@@ -126,6 +126,7 @@ class BalanceRepository:
                 normalized.append(
                     (
                         str(row.get("account_type") or "spot"),
+                        str(row.get("mirror_of") or ""),
                         round(float(row.get("total_usd", 0) or 0), 8),
                         assets_key,
                     )

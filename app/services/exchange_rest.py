@@ -70,6 +70,7 @@ def _merge_accounts(
     aggregated_accounts: list[AccountBalanceSchema] = []
     flat_assets: dict[str, AssetSchema] = {}
     total_usd = 0.0
+    warnings: list[str] = []
     mirror_seen_account_types: set[str] = set()
 
     for account in accounts_payload:
@@ -93,6 +94,8 @@ def _merge_accounts(
             )
 
             asset = AssetSchema(coin=coin, amount=amount, value_usd=value_usd)
+            if amount > 0 and value_usd <= 0:
+                warnings.append(f"unvalued_asset:{account_type}:{coin}")
             assets.append(asset)
             account_total += value_usd
 
@@ -115,6 +118,7 @@ def _merge_accounts(
                     account_type=account_type,
                     assets=assets,
                     total_usd=account_total,
+                    mirror_of=mirror_of,
                 )
             )
             # Only add to total_usd if this is NOT a mirrored account
@@ -129,6 +133,7 @@ def _merge_accounts(
         total_usd=total_usd,
         updated_at=datetime.now(timezone.utc),
         actual=bool(aggregated_accounts or flat_assets or total_usd > 0),
+        warnings=sorted(set(warnings)),
     )
 
 
@@ -396,7 +401,7 @@ class BinanceRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "margin",
                 "tickers": tickers,
                 "assets": [
                     {"coin": item["asset"], "amount": _safe_float(item, "netAsset")}
@@ -404,7 +409,7 @@ class BinanceRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "funding",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -416,7 +421,7 @@ class BinanceRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -427,7 +432,7 @@ class BinanceRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "coin_futures",
                 "tickers": tickers,
                 "assets": [
                     {"coin": item["asset"], "amount": _safe_float(item, "balance")}
@@ -524,7 +529,7 @@ class OkxRestBalanceGateway(BaseRestGateway):
 
         payload = [
             {
-                "account_type": "spot",
+                "account_type": "trading",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -537,7 +542,7 @@ class OkxRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "funding",
                 "tickers": tickers,
                 "assets": [
                     {"coin": item["ccy"], "amount": _safe_float(item, "bal")}
@@ -594,7 +599,7 @@ class BybitRestBalanceGateway(BaseRestGateway):
         accounts = payload.get("result", {}).get("list", [])
         merged_payload = [
             {
-                "account_type": "spot",
+                "account_type": "unified",
                 "assets": [
                     {
                         "coin": item["coin"],
@@ -734,7 +739,7 @@ class BitgetRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "margin",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -745,7 +750,7 @@ class BitgetRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "linear_futures",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -754,7 +759,20 @@ class BitgetRestBalanceGateway(BaseRestGateway):
                             item, "available", "accountEquity", "equity"
                         ),
                     }
-                    for item in linear + inverse
+                    for item in linear
+                ],
+            },
+            {
+                "account_type": "inverse_futures",
+                "tickers": tickers,
+                "assets": [
+                    {
+                        "coin": item.get("marginCoin"),
+                        "amount": _safe_float(
+                            item, "available", "accountEquity", "equity"
+                        ),
+                    }
+                    for item in inverse
                 ],
             },
         ]
@@ -845,8 +863,9 @@ class GateIoRestBalanceGateway(BaseRestGateway):
                         return True
                     break
 
-        # Fallback: if futures has a balance, assume possible unified
-        return True
+        # A matching USDT balance is the only evidence that these views mirror
+        # one unified account; otherwise preserve and count them separately.
+        return False
 
     async def fetch_balance(
         self,
@@ -891,19 +910,21 @@ class GateIoRestBalanceGateway(BaseRestGateway):
         is_unified = await self._detect_unified_account(api_key, secret, futures, spot_assets=spot_assets)
 
         if is_unified:
-            # Unified account: spot total = total balance.
-            # Show same total under both spot and futures for display,
-            # but don't double-count in merged total.
             payload = [
                 {
                     "account_type": "spot",
                     "tickers": tickers,
-                    "assets": spot_assets + margin_assets,
+                    "assets": spot_assets,
                 },
                 {
-                    "account_type": "futures",
+                    "account_type": "margin",
                     "tickers": tickers,
-                    "assets": spot_assets + margin_assets,
+                    "assets": margin_assets,
+                },
+                {
+                    "account_type": "usdt_futures",
+                    "tickers": tickers,
+                    "assets": spot_assets,
                     "mirror_of": "spot",
                 },
             ]
@@ -915,12 +936,12 @@ class GateIoRestBalanceGateway(BaseRestGateway):
                     "assets": spot_assets,
                 },
                 {
-                    "account_type": "spot",
+                    "account_type": "margin",
                     "tickers": tickers,
                     "assets": margin_assets,
                 },
                 {
-                    "account_type": "futures",
+                    "account_type": "usdt_futures",
                     "tickers": tickers,
                     "assets": [
                         {
@@ -1017,7 +1038,7 @@ class KucoinRestBalanceGateway(BaseRestGateway):
 
         payload = [
             {
-                "account_type": "spot",
+                "account_type": "trade",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -1028,7 +1049,7 @@ class KucoinRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "main",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -1132,7 +1153,7 @@ class MexcRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -1334,7 +1355,7 @@ class PoloniexRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "tickers": tickers,
                 "assets": [
                     {
@@ -1482,7 +1503,7 @@ class CoinexRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "spot",
+                "account_type": "margin",
                 "assets": [
                     {
                         "coin": item.get("ccy") or item.get("currency"),
@@ -1492,7 +1513,7 @@ class CoinexRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "assets": [
                     {
                         "coin": item.get("ccy") or item.get("currency"),
@@ -1558,7 +1579,7 @@ class BingxRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "assets": [
                     {
                         "coin": (swap.get("data", {}) or {})
@@ -1662,7 +1683,7 @@ class XtRestBalanceGateway(BaseRestGateway):
                 ],
             },
             {
-                "account_type": "futures",
+                "account_type": "usdt_futures",
                 "assets": [
                     {
                         "coin": item.get("coin"),

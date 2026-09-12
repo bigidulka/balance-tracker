@@ -35,6 +35,10 @@ from app.services.balance_service import (
     WALLET_SERVICE_PREFIXES,
     wallet_service_name_for,
 )
+from app.services.account_type_classification import (
+    account_counts_toward_total,
+    dashboard_account_bucket,
+)
 from app.services.entitlements_service import EntitlementsService
 from app.services.logging_context import get_request_logger, request_log_context
 from app.services.integration_service import IntegrationService
@@ -196,6 +200,7 @@ async def _get_cached_balances_uncached(
                         account_type=acc.get("account_type", "spot"),
                         assets=acc_assets,
                         total_usd=acc.get("total_usd", 0),
+                        mirror_of=acc.get("mirror_of"),
                     )
                 )
 
@@ -331,6 +336,7 @@ async def get_history(
                     account_type=acc.get("account_type", "spot"),
                     assets=[AssetSchema(**a) for a in acc.get("assets", [])],
                     total_usd=acc.get("total_usd", 0),
+                    mirror_of=acc.get("mirror_of"),
                 )
                 for acc in (entry.accounts or [])
             ],
@@ -523,7 +529,9 @@ async def _get_dashboard_summary_uncached(
         if accounts:
             has_account_type = False
             for acc in accounts:
-                acc_type = (acc.get("account_type") or "").lower()
+                if not account_counts_toward_total(acc):
+                    continue
+                acc_type = dashboard_account_bucket(acc.get("account_type"))
                 acc_total = float(acc.get("total_usd") or 0.0)
                 if acc_type == "futures":
                     futures_total += acc_total

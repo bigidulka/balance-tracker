@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 import time
 
+from bot.services.account_type_classification import (
+    account_counts_toward_total,
+    dashboard_account_bucket,
+)
 from bot.api_client import api_client
 from bot.config import settings
 
@@ -137,7 +141,9 @@ def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
 
         if accounts:
             for acc in accounts:
-                acc_type = acc.get("account_type")
+                if not account_counts_toward_total(acc):
+                    continue
+                acc_type = dashboard_account_bucket(acc.get("account_type"))
                 if acc_type == "spot":
                     spot_total += acc.get("total_usd", 0)
                     if acc.get("total_usd", 0) > 0 or acc.get("assets"):
@@ -146,7 +152,7 @@ def parse_balances(data: dict[str, Any]) -> dict[str, Any]:
                             "service": name,
                             "integration_id": integration_id,
                         }
-                elif acc_type == "futures":
+                else:
                     futures_total += acc.get("total_usd", 0)
                     if acc.get("total_usd", 0) > 0 or acc.get("assets"):
                         futures_exchanges[key] = {

@@ -52,79 +52,79 @@ for logger_name in [
     logging.getLogger(logger_name).propagate = False
 
 
-# Конфигурация типов счетов для каждой биржи
-# Все типы нормализуются к: spot, futures
+# Конфигурация source account types для каждой биржи. Labels are API-visible;
+# dashboard spot/futures compatibility is handled separately by classification.
 EXCHANGE_ACCOUNT_TYPES: dict[str, list[dict]] = {
     "binance": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "margin"}},  # margin -> spot
-        {"type": "spot", "params": {"type": "funding"}},  # funding -> spot
-        {"type": "futures", "params": {"type": "future"}},  # USDT-M futures
-        {"type": "futures", "params": {"type": "delivery"}},  # COIN-M futures
+        {"type": "margin", "params": {"type": "margin"}},
+        {"type": "funding", "params": {"type": "funding"}},
+        {"type": "usdt_futures", "params": {"type": "future"}},
+        {"type": "coin_futures", "params": {"type": "delivery"}},
     ],
     "okx": [
-        {"type": "spot", "params": {"type": "trading"}},  # unified trading -> spot
-        {"type": "spot", "params": {"type": "funding"}},  # funding -> spot
+        {"type": "trading", "params": {"type": "trading"}},
+        {"type": "funding", "params": {"type": "funding"}},
     ],
     "bybit": [
         # Bybit Unified Account - один запрос возвращает все балансы (spot + derivatives)
-        {"type": "spot", "params": {"type": "unified"}},
+        {"type": "unified", "params": {"type": "unified"}},
     ],
     "bitget": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "margin"}},  # margin -> spot
+        {"type": "margin", "params": {"type": "margin"}},
         {
-            "type": "futures",
+            "type": "linear_futures",
             "params": {"type": "swap", "subType": "linear"},
-        },  # USDT futures
+        },
         {
-            "type": "futures",
+            "type": "inverse_futures",
             "params": {"type": "swap", "subType": "inverse"},
-        },  # COIN futures
+        },
     ],
     "gateio": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "margin"}},  # margin -> spot
+        {"type": "margin", "params": {"type": "margin"}},
         {
-            "type": "futures",
+            "type": "usdt_futures",
             "params": {"type": "swap", "settle": "usdt"},
-        },  # USDT perpetual -> futures
+        },
     ],
     "htx": [
         {"type": "spot", "params": {}},  # только spot
     ],
     "kucoin": [
-        {"type": "spot", "params": {"type": "trade"}},  # trade -> spot
-        {"type": "spot", "params": {"type": "main"}},  # main -> spot
+        {"type": "trade", "params": {"type": "trade"}},
+        {"type": "main", "params": {"type": "main"}},
     ],
     "mexc": [
         {"type": "spot", "params": {}},  # default spot balance
-        {"type": "futures", "params": {"type": "swap"}},  # futures
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
     "bitmart": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "margin"}},  # margin -> spot
-        {"type": "futures", "params": {"type": "swap"}},
+        {"type": "margin", "params": {"type": "margin"}},
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
     "poloniex": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "futures", "params": {"type": "swap"}},
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
     "lbank": [
         {"type": "spot", "params": {}},
     ],
     "coinex": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "spot", "params": {"type": "margin"}},  # margin -> spot
-        {"type": "futures", "params": {"type": "swap"}},
+        {"type": "margin", "params": {"type": "margin"}},
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
     "bingx": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "futures", "params": {"type": "swap"}},
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
     "xt": [
         {"type": "spot", "params": {"type": "spot"}},
-        {"type": "futures", "params": {"type": "swap"}},
+        {"type": "usdt_futures", "params": {"type": "swap"}},
     ],
 }
 
@@ -990,6 +990,8 @@ class CCXTManager:
 
         async def _fetch_balance_impl() -> ServiceBalanceSchema:
             gateway = self._get_balance_gateway_registry().resolve(exchange_id)
+            if config_override is None:
+                return await gateway.fetch_balance(exchange_id, self)
             return await gateway.fetch_balance(
                 exchange_id,
                 self,
@@ -1035,14 +1037,8 @@ class CCXTManager:
             try:
                 tickers = await self._get_tickers(exchange, exchange_id)
 
-                accounts_data: dict[str, dict[str, AssetSchema]] = {
-                    "spot": {},
-                    "futures": {},
-                }
-                accounts_totals: dict[str, float] = {
-                    "spot": 0.0,
-                    "futures": 0.0,
-                }
+                accounts_data: dict[str, dict[str, AssetSchema]] = {}
+                accounts_totals: dict[str, float] = {}
 
                 inter_account_delay = max(
                     0.0, settings.ccxt_inter_account_delay_seconds
@@ -1055,68 +1051,79 @@ class CCXTManager:
                         await asyncio.sleep(inter_account_delay)
                     if isinstance(result, AccountBalanceSchema) and result.assets:
                         acc_type = result.account_type
+                        account_assets = accounts_data.setdefault(acc_type, {})
+                        accounts_totals.setdefault(acc_type, 0.0)
 
                         for asset in result.assets:
-                            if asset.coin in accounts_data[acc_type]:
-                                existing = accounts_data[acc_type][asset.coin]
-                                accounts_data[acc_type][asset.coin] = AssetSchema(
+                            if asset.coin in account_assets:
+                                existing = account_assets[asset.coin]
+                                account_assets[asset.coin] = AssetSchema(
                                     coin=asset.coin,
                                     amount=existing.amount + asset.amount,
                                     value_usd=existing.value_usd + asset.value_usd,
                                 )
                             else:
-                                accounts_data[acc_type][asset.coin] = asset
+                                account_assets[asset.coin] = asset
 
                         accounts_totals[acc_type] += result.total_usd
 
                 accounts: list[AccountBalanceSchema] = []
                 all_assets: dict[str, AssetSchema] = {}
                 total_usd = 0.0
+                warnings: list[str] = []
 
-                # Gate.io unified account dedup:
-                # In unified mode, spot and futures share the same USDT balance.
-                # Detect by comparing USDT amounts and skip futures if mirrored.
+                # Gate.io unified account dedup: preserve the source labels but
+                # make the mirrored futures view display-only for totals.
                 unified_account_detected = False
-                if exchange_id == "gateio" and accounts_data["spot"] and accounts_data["futures"]:
+                if (
+                    exchange_id == "gateio"
+                    and accounts_data.get("spot")
+                    and accounts_data.get("usdt_futures")
+                ):
                     spot_usdt = accounts_data["spot"].get("USDT")
-                    futures_total_amount = accounts_totals.get("futures", 0.0)
+                    futures_total_amount = accounts_totals.get("usdt_futures", 0.0)
                     if spot_usdt and futures_total_amount > 0:
                         spot_usdt_val = spot_usdt.value_usd if isinstance(spot_usdt, AssetSchema) else float(spot_usdt)
                         if abs(spot_usdt_val - futures_total_amount) / max(spot_usdt_val, futures_total_amount) < 0.05:
                             unified_account_detected = True
-                            # Copy spot assets into futures for display
-                            accounts_data["futures"] = dict(accounts_data["spot"])
-                            accounts_totals["futures"] = accounts_totals["spot"]
+                            accounts_data["usdt_futures"] = dict(accounts_data["spot"])
+                            accounts_totals["usdt_futures"] = accounts_totals["spot"]
 
-                for acc_type in ["spot", "futures"]:
-                    if accounts_data[acc_type]:
-                        assets_list = list(accounts_data[acc_type].values())
+                for acc_type, account_assets in accounts_data.items():
+                    if account_assets:
+                        assets_list = list(account_assets.values())
+                        mirror_of = (
+                            "spot"
+                            if unified_account_detected and acc_type == "usdt_futures"
+                            else None
+                        )
                         accounts.append(
                             AccountBalanceSchema(
                                 account_type=acc_type,
                                 assets=assets_list,
                                 total_usd=accounts_totals[acc_type],
+                                mirror_of=mirror_of,
                             )
                         )
-                        # For unified accounts, don't double-count futures
-                        if unified_account_detected and acc_type == "futures":
-                            pass  # skip total_usd addition
+                        if mirror_of:
+                            continue
                         else:
                             total_usd += accounts_totals[acc_type]
 
-
-                        # For unified accounts, don't double-count futures assets
-                        if not (unified_account_detected and acc_type == "futures"):
-                            for asset in assets_list:
-                                if asset.coin in all_assets:
-                                    existing = all_assets[asset.coin]
-                                    all_assets[asset.coin] = AssetSchema(
-                                        coin=asset.coin,
-                                        amount=existing.amount + asset.amount,
-                                        value_usd=existing.value_usd + asset.value_usd,
-                                    )
-                                else:
-                                    all_assets[asset.coin] = asset
+                        for asset in assets_list:
+                            if asset.amount > 0 and asset.value_usd <= 0:
+                                warnings.append(
+                                    f"unvalued_asset:{acc_type}:{asset.coin}"
+                                )
+                            if asset.coin in all_assets:
+                                existing = all_assets[asset.coin]
+                                all_assets[asset.coin] = AssetSchema(
+                                    coin=asset.coin,
+                                    amount=existing.amount + asset.amount,
+                                    value_usd=existing.value_usd + asset.value_usd,
+                                )
+                            else:
+                                all_assets[asset.coin] = asset
 
 
                 return ServiceBalanceSchema(
@@ -1126,6 +1133,7 @@ class CCXTManager:
                     total_usd=total_usd,
                     updated_at=datetime.now(timezone.utc),
                     actual=bool(accounts or all_assets or total_usd > 0),
+                    warnings=sorted(set(warnings)),
                 )
 
             except Exception as e:

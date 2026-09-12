@@ -133,9 +133,8 @@ class TestGateIoUnifiedDetection(unittest.IsolatedAsyncioTestCase):
         spot_assets = [{"coin": "USDT", "amount": 200.0}]
         futures_data = {"available": "50", "total": "50"}
         result = await gw._detect_unified_account("key", "secret", futures_data, spot_assets=spot_assets)
-        # Returns True as fallback; the comparison shows they're not ~equal
-        # but the fallback allows it. This is acceptable.
-        self.assertTrue(result)  # fallback heuristic
+        # A non-matching futures balance is a separate account, not a mirror.
+        self.assertFalse(result)
 
     async def test_detect_no_futures_balance(self):
         from app.services.exchange_rest import GateIoRestBalanceGateway

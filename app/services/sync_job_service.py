@@ -116,6 +116,11 @@ class SyncJobService:
                         if isinstance(asset, dict)
                     ],
                     total_usd=float(account.get("total_usd") or 0.0),
+                    mirror_of=(
+                        str(account.get("mirror_of"))
+                        if account.get("mirror_of")
+                        else None
+                    ),
                 )
                 for account in (raw_balance.get("accounts") or [])
                 if isinstance(account, dict)

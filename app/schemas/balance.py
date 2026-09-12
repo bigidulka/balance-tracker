@@ -15,6 +15,7 @@ class AccountBalanceSchema(BaseModel):
     account_type: str  # spot, futures, margin, swap, unified, funding и т.д.
     assets: list[AssetSchema]
     total_usd: float = Field(default=0.0)
+    mirror_of: str | None = None
 
 
 class ServiceBalanceSchema(BaseModel):
@@ -27,6 +28,7 @@ class ServiceBalanceSchema(BaseModel):
     total_usd: float = Field(default=0.0)
     updated_at: datetime
     actual: bool = True
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PortfolioResponse(BaseModel):

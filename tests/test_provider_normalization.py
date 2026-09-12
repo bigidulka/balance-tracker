@@ -8,13 +8,14 @@ class ProviderNormalizationSmokeTests(unittest.TestCase):
     def setUp(self):
         self.manager = CCXTManager()
 
-    def test_exchange_account_type_contract_is_normalized(self):
-        allowed = {"spot", "futures"}
+    def test_exchange_account_type_contract_is_canonical(self):
+        from app.services.account_type_classification import CANONICAL_ACCOUNT_TYPES
+
         for exchange_id, account_types in EXCHANGE_ACCOUNT_TYPES.items():
             for item in account_types:
                 self.assertIn(
                     item["type"],
-                    allowed,
+                    CANONICAL_ACCOUNT_TYPES,
                     msg=f"Unexpected account type for {exchange_id}: {item['type']}",
                 )
 

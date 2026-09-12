@@ -242,6 +242,7 @@ class BalanceService:
                             account_type=acc.get("account_type", "spot"),
                             assets=acc_assets,
                             total_usd=acc.get("total_usd", 0),
+                            mirror_of=acc.get("mirror_of"),
                         )
                     )
             return ServiceBalanceSchema(
@@ -268,6 +269,7 @@ class BalanceService:
                     AssetSchema(**asset) for asset in (account.get("assets") or [])
                 ],
                 total_usd=float(account.get("total_usd") or 0.0),
+                mirror_of=account.get("mirror_of"),
             )
             for account in (getattr(record, "accounts", None) or [])
         ]
