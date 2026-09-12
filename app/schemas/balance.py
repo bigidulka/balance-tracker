@@ -16,6 +16,7 @@ class AccountBalanceSchema(BaseModel):
     assets: list[AssetSchema]
     total_usd: float = Field(default=0.0)
     mirror_of: str | None = None
+    error: str | None = None
 
 
 class ServiceBalanceSchema(BaseModel):

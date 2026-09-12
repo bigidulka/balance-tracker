@@ -79,6 +79,7 @@ def _merge_accounts(
         assets: list[AssetSchema] = []
         account_total = 0.0
         mirror_of = account.get("mirror_of")
+        account_error = account.get("error")
 
         for raw_asset in account.get("assets", []):
             coin = str(raw_asset.get("coin", "")).upper()
@@ -112,13 +113,14 @@ def _merge_accounts(
                         value_usd=existing.value_usd + asset.value_usd,
                     )
 
-        if assets:
+        if assets or account_error is not None:
             aggregated_accounts.append(
                 AccountBalanceSchema(
                     account_type=account_type,
                     assets=assets,
                     total_usd=account_total,
                     mirror_of=mirror_of,
+                    error=str(account_error) if account_error else None,
                 )
             )
             # Only add to total_usd if this is NOT a mirrored account
@@ -132,7 +134,8 @@ def _merge_accounts(
         assets=list(flat_assets.values()),
         total_usd=total_usd,
         updated_at=datetime.now(timezone.utc),
-        actual=bool(aggregated_accounts or flat_assets or total_usd > 0),
+        actual=bool(aggregated_accounts or flat_assets or total_usd > 0)
+        and not any(account.error for account in aggregated_accounts),
         warnings=sorted(set(warnings)),
     )
 
@@ -1330,13 +1333,13 @@ class PoloniexRestBalanceGateway(BaseRestGateway):
                 "https://futures-api.poloniex.com/v3/account/balance",
                 headers=self._headers(api_key, secret, "/v3/account/balance"),
             )
-        except aiohttp.ClientResponseError as exc:
-            if exc.status in {401, 403, 404, 503}:
+        except (aiohttp.ClientResponseError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            response_status = getattr(exc, "status", None)
+            if response_status is None or response_status in {401, 403, 404, 503}:
                 logger.warning(
-                    "Poloniex futures balance endpoint returned %s, skipping optional account",
-                    exc.status,
+                    "Poloniex futures balance endpoint unavailable; returning partial balance"
                 )
-                futures = {"data": {"details": []}}
+                futures = None
             else:
                 raise
 
@@ -1362,8 +1365,9 @@ class PoloniexRestBalanceGateway(BaseRestGateway):
                         "coin": item.get("ccy"),
                         "amount": _safe_float(item, "eq", "avail"),
                     }
-                    for item in (futures.get("data", {}) or {}).get("details", [])
+                    for item in ((futures or {}).get("data", {}) or {}).get("details", [])
                 ],
+                "error": "account balance unavailable" if futures is None else None,
             },
         ]
         return _merge_accounts(exchange_id, payload, manager.calculate_usd_value_sync)
@@ -1648,6 +1652,7 @@ class XtRestBalanceGateway(BaseRestGateway):
             "GET", "https://sapi.xt.com/v4/balances", headers=spot_headers
         )
 
+        futures_error = None
         try:
             timestamp2 = str(int(datetime.now(timezone.utc).timestamp() * 1000))
             futures_payload = f"xt-validate-appkey={api_key}&xt-validate-timestamp={timestamp2}#/future/user/v1/balance/list"
@@ -1669,6 +1674,7 @@ class XtRestBalanceGateway(BaseRestGateway):
         except Exception as exc:
             logger.warning("XT futures balance fetch failed, skipping: %s", exc)
             futures = {}
+            futures_error = "account balance unavailable"
 
         payload = [
             {
@@ -1691,6 +1697,7 @@ class XtRestBalanceGateway(BaseRestGateway):
                     }
                     for item in futures.get("result", []) or []
                 ],
+                "error": futures_error,
             },
         ]
         return _merge_accounts(exchange_id, payload, manager.calculate_usd_value_sync)

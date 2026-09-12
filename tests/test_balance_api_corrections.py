@@ -222,6 +222,33 @@ class ValuationCompletenessContractTests(unittest.TestCase):
         self.assertTrue(result.actual)
         self.assertEqual(result.warnings, ["unvalued_asset:spot:UNKNOWN"])
 
+    def test_rest_merge_returns_partial_assets_and_generic_account_error(self):
+        from app.services.exchange_rest import _merge_accounts
+
+        result = _merge_accounts(
+            "xt",
+            [
+                {
+                    "account_type": "spot",
+                    "assets": [{"coin": "USDT", "amount": 5.0}],
+                },
+                {
+                    "account_type": "usdt_futures",
+                    "assets": [],
+                    "error": "account balance unavailable",
+                },
+            ],
+            lambda _coin, amount, _tickers: amount,
+        )
+
+        self.assertFalse(result.actual)
+        self.assertEqual(result.total_usd, 5.0)
+        self.assertEqual(
+            [account.account_type for account in result.accounts],
+            ["spot", "usdt_futures"],
+        )
+        self.assertEqual(result.accounts[1].error, "account balance unavailable")
+
 
 class QueuedCredentialBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
