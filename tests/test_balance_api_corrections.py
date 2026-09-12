@@ -249,6 +249,25 @@ class ValuationCompletenessContractTests(unittest.TestCase):
         )
         self.assertEqual(result.accounts[1].error, "account balance unavailable")
 
+    def test_rest_merge_preserves_successful_empty_account_types(self):
+        from app.services.exchange_rest import _merge_accounts
+
+        result = _merge_accounts(
+            "coinex",
+            [
+                {"account_type": "spot", "assets": []},
+                {"account_type": "margin", "assets": []},
+                {"account_type": "usdt_futures", "assets": []},
+            ],
+            lambda _coin, _amount, _tickers: 0.0,
+        )
+
+        self.assertTrue(result.actual)
+        self.assertEqual(
+            [account.account_type for account in result.accounts],
+            ["spot", "margin", "usdt_futures"],
+        )
+
 
 class QueuedCredentialBoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -452,7 +471,10 @@ class CCXTAggregationContractTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await manager._fetch_balance_via_ccxt("gateio")
 
-        self.assertEqual([account.account_type for account in result.accounts], ["spot", "usdt_futures"])
+        self.assertEqual(
+            [account.account_type for account in result.accounts],
+            ["spot", "usdt_futures", "margin"],
+        )
         self.assertEqual(result.accounts[1].mirror_of, "spot")
         self.assertEqual(result.total_usd, 100.0)
         self.assertEqual(result.assets[0].amount, 100.0)

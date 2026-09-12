@@ -243,6 +243,7 @@ class BalanceService:
                             assets=acc_assets,
                             total_usd=acc.get("total_usd", 0),
                             mirror_of=acc.get("mirror_of"),
+                            error=acc.get("error"),
                         )
                     )
             return ServiceBalanceSchema(
@@ -270,6 +271,7 @@ class BalanceService:
                 ],
                 total_usd=float(account.get("total_usd") or 0.0),
                 mirror_of=account.get("mirror_of"),
+                error=account.get("error"),
             )
             for account in (getattr(record, "accounts", None) or [])
         ]

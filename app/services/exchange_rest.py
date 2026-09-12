@@ -113,19 +113,18 @@ def _merge_accounts(
                         value_usd=existing.value_usd + asset.value_usd,
                     )
 
-        if assets or account_error is not None:
-            aggregated_accounts.append(
-                AccountBalanceSchema(
-                    account_type=account_type,
-                    assets=assets,
-                    total_usd=account_total,
-                    mirror_of=mirror_of,
-                    error=str(account_error) if account_error else None,
-                )
+        aggregated_accounts.append(
+            AccountBalanceSchema(
+                account_type=account_type,
+                assets=assets,
+                total_usd=account_total,
+                mirror_of=mirror_of,
+                error=str(account_error) if account_error else None,
             )
-            # Only add to total_usd if this is NOT a mirrored account
-            if not mirror_of:
-                total_usd += account_total
+        )
+        # Only add to total_usd if this is NOT a mirrored account
+        if not mirror_of:
+            total_usd += account_total
 
 
     return ServiceBalanceSchema(

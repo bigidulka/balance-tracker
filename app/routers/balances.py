@@ -201,6 +201,7 @@ async def _get_cached_balances_uncached(
                         assets=acc_assets,
                         total_usd=acc.get("total_usd", 0),
                         mirror_of=acc.get("mirror_of"),
+                        error=acc.get("error"),
                     )
                 )
 
@@ -337,6 +338,7 @@ async def get_history(
                     assets=[AssetSchema(**a) for a in acc.get("assets", [])],
                     total_usd=acc.get("total_usd", 0),
                     mirror_of=acc.get("mirror_of"),
+                    error=acc.get("error"),
                 )
                 for acc in (entry.accounts or [])
             ],

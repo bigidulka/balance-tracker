@@ -949,7 +949,11 @@ class CCXTManager:
                     )
 
             if not assets:
-                return None
+                return AccountBalanceSchema(
+                    account_type=account_type,
+                    assets=[],
+                    total_usd=0.0,
+                )
 
             return AccountBalanceSchema(
                 account_type=account_type,
@@ -977,7 +981,12 @@ class CCXTManager:
                 logger.debug(f"{exchange_id} {account_type}: {e}")
             else:
                 logger.warning(f"{exchange_id} {account_type} error: {e}")
-            return None
+            return AccountBalanceSchema(
+                account_type=account_type,
+                assets=[],
+                total_usd=0.0,
+                error="account balance unavailable",
+            )
 
     async def fetch_balance(
         self,
@@ -1039,6 +1048,7 @@ class CCXTManager:
 
                 accounts_data: dict[str, dict[str, AssetSchema]] = {}
                 accounts_totals: dict[str, float] = {}
+                account_results: list[AccountBalanceSchema] = []
 
                 inter_account_delay = max(
                     0.0, settings.ccxt_inter_account_delay_seconds
@@ -1049,6 +1059,8 @@ class CCXTManager:
                     )
                     if inter_account_delay > 0 and index < len(account_types) - 1:
                         await asyncio.sleep(inter_account_delay)
+                    if isinstance(result, AccountBalanceSchema):
+                        account_results.append(result)
                     if isinstance(result, AccountBalanceSchema) and result.assets:
                         acc_type = result.account_type
                         account_assets = accounts_data.setdefault(acc_type, {})
@@ -1071,6 +1083,7 @@ class CCXTManager:
                 all_assets: dict[str, AssetSchema] = {}
                 total_usd = 0.0
                 warnings: list[str] = []
+                account_errors = False
 
                 # Gate.io unified account dedup: preserve the source labels but
                 # make the mirrored futures view display-only for totals.
@@ -1125,6 +1138,15 @@ class CCXTManager:
                             else:
                                 all_assets[asset.coin] = asset
 
+                represented_types = {account.account_type for account in accounts}
+                for result in account_results:
+                    if result.account_type not in represented_types:
+                        accounts.append(result)
+                        represented_types.add(result.account_type)
+                    if result.error:
+                        account_errors = True
+                        warnings.append(f"account_unavailable:{result.account_type}")
+
 
                 return ServiceBalanceSchema(
                     service=exchange_id,
@@ -1132,7 +1154,7 @@ class CCXTManager:
                     assets=list(all_assets.values()),
                     total_usd=total_usd,
                     updated_at=datetime.now(timezone.utc),
-                    actual=bool(accounts or all_assets or total_usd > 0),
+                    actual=bool(accounts) and not account_errors,
                     warnings=sorted(set(warnings)),
                 )
 
