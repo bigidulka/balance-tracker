@@ -37,10 +37,20 @@ class TronTonAddressDetectionTests(unittest.TestCase):
 
 
 class TronTonServiceNameTests(unittest.TestCase):
-    def test_service_name_lowercases(self):
-        name = TronTonService.service_name_for("TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9")
-        self.assertTrue(name.startswith("tron_ton_"))
-        self.assertEqual(name, name.lower())
+    def test_service_name_uses_canonical_chain_prefix(self):
+        tron_name = TronTonService.service_name_for("TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9")
+        self.assertTrue(tron_name.startswith("tron_"))
+        self.assertEqual(tron_name, tron_name.lower())
+
+        ton_name = TronTonService.service_name_for(
+            "EQBvW8Z5huBkMJYdnfAEM5JqTNkuWX3diqYENkWsIL0XggGG"
+        )
+        self.assertTrue(ton_name.startswith("ton_"))
+        self.assertEqual(ton_name, ton_name.lower())
+
+        # Identifiers that are neither TRON nor TON addresses keep the legacy prefix.
+        legacy_name = TronTonService.service_name_for("not-an-address")
+        self.assertTrue(legacy_name.startswith("tron_ton_"))
 
 
 class TronBalanceParsingTests(unittest.IsolatedAsyncioTestCase):
@@ -69,8 +79,9 @@ class TronBalanceParsingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(service, "_get_session") as mock_session_factory,
-            patch.object(
-                service, "_get_price_usd", new=AsyncMock(return_value=trx_price)
+            patch(
+                "app.services.tron_ton_service.get_native_price",
+                new=AsyncMock(return_value=trx_price),
             ),
         ):
             mock_resp = AsyncMock()
@@ -103,7 +114,11 @@ class TronBalanceParsingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(service, "_get_session") as mock_session_factory,
-            patch.object(service, "_get_price_usd", new=AsyncMock(return_value=0.30)),
+            # USDT is a static stablecoin in this service; no enrichment is required.
+            patch(
+                "app.services.tron_ton_service.enrich_prices",
+                new=AsyncMock(return_value=[]),
+            ),
         ):
             mock_resp = AsyncMock()
             mock_resp.raise_for_status = MagicMock()
@@ -133,7 +148,11 @@ class TronBalanceParsingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(service, "_get_session") as mock_session_factory,
-            patch.object(service, "_get_price_usd", new=AsyncMock(return_value=0.30)),
+            # No enrichment data for an unknown contract, so it is priced at zero.
+            patch(
+                "app.services.tron_ton_service.enrich_prices",
+                new=AsyncMock(return_value=[]),
+            ),
         ):
             mock_resp = AsyncMock()
             mock_resp.raise_for_status = MagicMock()

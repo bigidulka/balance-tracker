@@ -42,9 +42,6 @@ _MOCK_DASHBOARD_SUMMARY: Dict[str, Any] = {
     "pnl_7d_pct": None,
     "pnl_30d": None,
     "pnl_30d_pct": None,
-    "avg_daily_pnl": None,
-    "best_day_pnl": None,
-    "worst_day_pnl": None,
 }
 
 

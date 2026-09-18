@@ -36,7 +36,8 @@ class TariffKeyboardTests(unittest.TestCase):
             for button in row
         ]
         self.assertIn("Free · current", texts)
-        self.assertIn("Low", texts)
+        # Plan buttons carry a price suffix (for example "Low · free"), so match the label prefix.
+        self.assertTrue(any(text.startswith("Low") for text in texts), texts)
         self.assertTrue(any("plan_code%3Dlow" in item for item in payloads))
 
     def test_integration_actions_has_single_toggle_button(self):

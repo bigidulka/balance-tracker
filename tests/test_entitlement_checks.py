@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
 from app.models.balance import Integration, Organization, Plan, Subscription, SyncJob
-from app.schemas.balance import ServiceBalanceSchema
+from app.schemas.balance import AssetSchema, ServiceBalanceSchema
 from app.schemas.integration import IntegrationCreateRequest
 from app.services.balance_service import BalanceService
 from app.services.entitlements_service import EntitlementsService
@@ -209,7 +209,7 @@ class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(exc.exception.detail["code"], "cex_account_limit_reached")
             self.assertEqual(exc.exception.detail["policy"]["max_cex_accounts"], 5)
 
-    async def test_free_plan_limits_evm_wallets_but_not_non_evm_wallets(self):
+    async def test_free_plan_limits_total_dex_wallets_across_chains(self):
         org_id = await self._seed_free_org_with_plan()
 
         async with self.session_maker() as session:
@@ -235,14 +235,17 @@ class EntitlementEnforcementTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(exc.exception.status_code, 403)
-            self.assertEqual(exc.exception.detail["code"], "evm_wallet_limit_reached")
-            self.assertEqual(exc.exception.detail["policy"]["max_evm_wallets"], 1)
+            self.assertEqual(exc.exception.detail["code"], "wallet_limit_reached")
+            self.assertEqual(exc.exception.detail["policy"]["max_wallets"], 1)
 
-            await service.ensure_can_create_integration(
-                org_id,
-                kind="dex",
-                chain="solana",
-            )
+            # The wallet limit is chain-agnostic: non-EVM wallets count towards it as well.
+            with self.assertRaises(HTTPException) as exc_non_evm:
+                await service.ensure_can_create_integration(
+                    org_id,
+                    kind="dex",
+                    chain="solana",
+                )
+            self.assertEqual(exc_non_evm.exception.detail["code"], "wallet_limit_reached")
 
 
 class EffectiveEntitlementsDatetimeTests(unittest.IsolatedAsyncioTestCase):
@@ -550,6 +553,29 @@ class RefreshRateLimitMetadataTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second.status, "completed")
 
 
+def _cex_target(integration_id: int, exchange_code: str) -> dict[str, object]:
+    """Balance target exactly as BalanceService.load_balance_targets builds it for CEX."""
+
+    return {
+        "kind": "cex",
+        "integration_id": integration_id,
+        "service": exchange_code,
+        "source_id": exchange_code,
+    }
+
+
+def _fetch_balance(**balances: ServiceBalanceSchema):
+    """side_effect for ccxt_manager.fetch_balance: listed sources answer, the rest fail."""
+
+    def _fetch(source_id: str, **kwargs: object) -> ServiceBalanceSchema:
+        del kwargs
+        if source_id in balances:
+            return balances[source_id]
+        raise RuntimeError(f"exchange unavailable: {source_id}")
+
+    return _fetch
+
+
 class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -583,7 +609,12 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     BalanceService,
                     "load_balance_targets",
-                    new=AsyncMock(return_value=(["binance"], [], {"binance"})),
+                    new=AsyncMock(
+                        return_value=(
+                            [_cex_target(1, "binance")],
+                            {"binance"},
+                        )
+                    ),
                 ),
                 patch.object(
                     service.entitlements,
@@ -591,8 +622,8 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
                     wraps=service.entitlements.ensure_refresh_interval_for_organization,
                 ) as ensure_refresh,
                 patch(
-                    "app.services.balance_service.ccxt_manager.fetch_all_balances",
-                    new=AsyncMock(return_value={"binance": Exception("boom")}),
+                    "app.services.balance_service.ccxt_manager.fetch_balance",
+                    new=AsyncMock(side_effect=Exception("boom")),
                 ),
                 patch(
                     "app.services.balance_service.okx_wallet_service.fetch_all_wallets",
@@ -627,7 +658,7 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
             success_balance = ServiceBalanceSchema(
                 service="binance",
                 accounts=[],
-                assets=[],
+                assets=[AssetSchema(coin="USDT", amount=10.0, value_usd=10.0)],
                 total_usd=10.0,
                 updated_at=datetime.now(timezone.utc),
                 actual=True,
@@ -643,16 +674,16 @@ class RefreshAllEntitlementSemanticsTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     BalanceService,
                     "load_balance_targets",
-                    new=AsyncMock(return_value=(["binance", "okx"], [], {"binance", "okx"})),
+                    new=AsyncMock(
+                        return_value=(
+                            [_cex_target(1, "binance"), _cex_target(2, "okx")],
+                            {"binance", "okx"},
+                        )
+                    ),
                 ),
                 patch(
-                    "app.services.balance_service.ccxt_manager.fetch_all_balances",
-                    new=AsyncMock(
-                        return_value={
-                            "binance": success_balance,
-                            "okx": Exception("boom"),
-                        }
-                    ),
+                    "app.services.balance_service.ccxt_manager.fetch_balance",
+                    new=AsyncMock(side_effect=_fetch_balance(binance=success_balance)),
                 ),
                 patch(
                     "app.services.balance_service.okx_wallet_service.fetch_all_wallets",

@@ -138,34 +138,38 @@ class ScreenSourceViewTests(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             rev=1,
         )
-        self.assertIn("0xf909...4cd8", detail.text.as_kwargs()["text"])
+        detail_text = detail.text.as_kwargs()["text"]
+        # Wallet labels use the abbreviated address form ("0xf90…4cd8").
+        self.assertIn("0xf90…4cd8", detail_text)
+        self.assertIn("0xf9095877f93603d0b6c44e5a82db5dc751b34cd8", detail_text)
         detail_buttons = [button.callback_data or "" for row in detail.keyboard.inline_keyboard for button in row]
         self.assertTrue(any("p=i%3D0%26page%3D0" in item for item in detail_buttons))
 
-    async def test_transactions_route_renders_source_picker_and_detail(self):
+    async def test_transactions_route_renders_development_stub(self):
         service = ScreenService(_SourceViewApiRepo(), _SourceViewUserRepo())
 
-        picker = await service.render(route=ROUTE_TRANSACTIONS, payload={"page": 0}, user_id=1, rev=1)
-        picker_buttons = [button.callback_data or "" for row in picker.keyboard.inline_keyboard for button in row]
-        self.assertTrue(any("p=i%3D0%26page%3D0" in item for item in picker_buttons))
-        self.assertFalse(any("p=i%3D1%26page%3D0" in item for item in picker_buttons))
+        view = await service.render(route=ROUTE_TRANSACTIONS, payload={"page": 0}, user_id=1, rev=1)
+        buttons = [button.callback_data or "" for row in view.keyboard.inline_keyboard for button in row]
+        button_texts = [button.text or "" for row in view.keyboard.inline_keyboard for button in row]
 
-        detail = await service.render(
-            route=ROUTE_TRANSACTIONS,
-            payload={"i": 0, "page": 0},
-            user_id=1,
-            rev=1,
-        )
-        self.assertIn("Transactions", detail.text.as_kwargs()["text"])
-        self.assertIn("deposit", detail.text.as_kwargs()["text"].lower())
+        text = view.text.as_kwargs()["text"]
+        self.assertIn("Transactions", text)
+        self.assertIn("under development", text)
+        self.assertEqual(button_texts, ["Back"])
+        self.assertTrue(any("a=b" in item for item in buttons))
 
     async def test_dex_picker_second_page_keeps_buttons(self):
         service = ScreenService(_PagedSourceViewApiRepo(), _SourceViewUserRepo())
 
         picker = await service.render(route=ROUTE_DEX, payload={"page": 1}, user_id=1, rev=1)
         picker_buttons = [button.text or "" for row in picker.keyboard.inline_keyboard for button in row]
+        picker_callbacks = [
+            button.callback_data or "" for row in picker.keyboard.inline_keyboard for button in row
+        ]
 
-        self.assertTrue(any(text.startswith("Wallet ") for text in picker_buttons))
+        # Auto-named wallet rows keep the abbreviated address label on the second page.
+        self.assertTrue(any("…" in text and "$" in text for text in picker_buttons), picker_buttons)
+        self.assertTrue(any("p=i%3D8%26page%3D0" in item for item in picker_callbacks), picker_callbacks)
 
     async def test_transaction_picker_second_page_keeps_buttons(self):
         service = ScreenService(_PagedSourceViewApiRepo(), _SourceViewUserRepo())

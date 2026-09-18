@@ -100,7 +100,9 @@ class ExchangeBalanceGatewayRegistryTests(unittest.TestCase):
 
 class BaseRestGatewayProxyFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_json_request_retries_direct_on_proxy_disconnect(self):
-        settings = Settings(proxy_host="127.0.0.1", proxy_port=3128)
+        # Proxy egress is configured through the unified OUTBOUND_PROXY_URL setting; patch the
+        # module-level settings so the test never depends on a developer's .env file.
+        settings = Settings(outbound_proxy_url="http://user:secret@127.0.0.1:3128")
         gateway = BinanceRestBalanceGateway(settings)
 
         attempts: list[str | None] = []
@@ -131,12 +133,14 @@ class BaseRestGatewayProxyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 return _FailingResponse()
             return _Response()
 
-        with patch("aiohttp.ClientSession.request", new=fake_request):
+        with patch("app.core.http.settings", settings), patch(
+            "aiohttp.ClientSession.request", new=fake_request
+        ):
             payload = await gateway._json_request("GET", "https://example.com/api")
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(len(attempts), 2)
-        self.assertTrue(attempts[0].endswith("@127.0.0.1:3128") or attempts[0] == "http://127.0.0.1:3128")
+        self.assertEqual(attempts[0], "http://user:secret@127.0.0.1:3128")
         self.assertIsNone(attempts[1])
 
 

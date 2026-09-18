@@ -1,9 +1,21 @@
+import base64
+import json
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot import api_client as api_client_module
 from bot.services import runtime
+
+
+def _jwt_token(*, expires_in_seconds: int = 3600) -> str:
+    """Unsigned JWT-shaped token: the runtime only decodes the payload to check `exp`."""
+
+    body = base64.urlsafe_b64encode(
+        json.dumps({"exp": int(time.time()) + expires_in_seconds}).encode("utf-8")
+    ).rstrip(b"=")
+    return f"header.{body.decode('ascii')}.signature"
 
 
 class _FakeResponse:
@@ -80,9 +92,10 @@ class BotRuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await runtime.is_local_user_allowed(1001))
 
     async def test_ensure_backend_auth_session_caches_per_telegram_user(self) -> None:
+        valid_token = _jwt_token()
         fake_bootstrap = AsyncMock(
             return_value={
-                "access_token": "token-1001",
+                "access_token": valid_token,
                 "user_id": 501,
                 "organization_id": 701,
                 "organization_name": "Telegram 1001",
@@ -107,7 +120,7 @@ class BotRuntimeAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_bootstrap.await_count, 1)
         self.assertEqual(first["organization_id"], 701)
         self.assertEqual(second["organization_id"], 701)
-        self.assertEqual(runtime._auth_sessions_fallback[1001]["access_token"], "token-1001")
+        self.assertEqual(runtime._auth_sessions_fallback[1001]["access_token"], valid_token)
         self.assertEqual(
             runtime._auth_sessions_fallback[1001]["version"],
             runtime.BACKEND_AUTH_SESSION_VERSION,

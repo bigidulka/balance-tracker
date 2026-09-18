@@ -5,11 +5,25 @@ import unittest
 
 
 class BotAPIAuthConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._environ_backup = dict(os.environ)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._environ_backup)
+        # Restore the modules in place: deleting them from sys.modules would hand other
+        # test modules a different module object than the one they imported.
+        self._reload_api_client()
+
     def _reload_api_client(self):
-        for module_name in ["bot.api_client", "bot.config"]:
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-        return importlib.import_module("bot.api_client")
+        """Re-read the environment into bot.config and bot.api_client without breaking identity."""
+
+        if "bot.config" in sys.modules:
+            importlib.reload(sys.modules["bot.config"])
+        module = sys.modules.get("bot.api_client")
+        if module is None:
+            return importlib.import_module("bot.api_client")
+        return importlib.reload(module)
 
     def test_build_headers_is_empty_without_per_user_session(self):
         os.environ["API_TOKEN"] = "test-token"

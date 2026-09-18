@@ -100,8 +100,8 @@ class TestMergeAccountsDeduplication(unittest.TestCase):
         # BTC value_usd is 0 because no tickers and not stablecoin
         self.assertAlmostEqual(asset_map["BTC"].value_usd, 0.0, places=1)
 
-    def test_empty_assets_skipped(self):
-        """Accounts with no positive assets should be skipped."""
+    def test_zero_balance_account_kept_without_affecting_totals(self):
+        """A zero-balance account stays visible for display but contributes nothing."""
         result = self._call_merge("gateio", [
             {
                 "account_type": "spot",
@@ -109,7 +109,10 @@ class TestMergeAccountsDeduplication(unittest.TestCase):
                 "assets": [{"coin": "USDT", "amount": 0}],
             },
         ])
-        self.assertEqual(len(result.accounts), 0)
+        self.assertEqual(len(result.accounts), 1)
+        self.assertEqual(result.accounts[0].account_type, "spot")
+        self.assertEqual(result.accounts[0].assets, [])
+        self.assertEqual(result.assets, [])
         self.assertAlmostEqual(result.total_usd, 0.0)
 
 
@@ -292,14 +295,17 @@ class TestDashboardMetricsSchema(unittest.TestCase):
             transactions_24h={"total": 0, "pending": 0, "failed": 0},
             timestamp=datetime.now(timezone.utc),
         )
-        # Default None for all trader metric fields
+        # Trader metric fields default to "unknown" and never invent a value.
         self.assertIsNone(resp.pnl_today)
+        self.assertIsNone(resp.pnl_today_pct)
         self.assertIsNone(resp.pnl_24h)
         self.assertIsNone(resp.pnl_7d)
         self.assertIsNone(resp.pnl_30d)
-        self.assertIsNone(resp.avg_daily_pnl)
-        self.assertIsNone(resp.best_day_pnl)
-        self.assertIsNone(resp.worst_day_pnl)
+        self.assertIsNone(resp.balance_today_start)
+        self.assertIsNone(resp.balance_24h_ago)
+        self.assertIsNone(resp.balance_7d_ago)
+        self.assertIsNone(resp.balance_30d_ago)
+        self.assertFalse(resp.pnl_includes_transfers)
 
     def test_dashboard_response_with_metrics(self):
         from app.schemas.balance import DashboardSummaryResponse
@@ -324,17 +330,15 @@ class TestDashboardMetricsSchema(unittest.TestCase):
             pnl_7d_pct=-1.9,
             pnl_30d=100.0,
             pnl_30d_pct=11.1,
-            avg_daily_pnl=10.0,
-            best_day_pnl=100.0,
-            worst_day_pnl=-50.0,
+            balance_24h_ago=975.0,
+            pnl_includes_transfers=True,
         )
         self.assertEqual(resp.pnl_today, 25.0)
         self.assertEqual(resp.pnl_24h, 50.5)
         self.assertEqual(resp.pnl_7d, -20.0)
         self.assertEqual(resp.pnl_30d, 100.0)
-        self.assertEqual(resp.avg_daily_pnl, 10.0)
-        self.assertEqual(resp.best_day_pnl, 100.0)
-        self.assertEqual(resp.worst_day_pnl, -50.0)
+        self.assertEqual(resp.balance_24h_ago, 975.0)
+        self.assertTrue(resp.pnl_includes_transfers)
 
 
 class TestDashboardText(unittest.TestCase):

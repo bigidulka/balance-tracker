@@ -470,6 +470,7 @@ class HistoryContractTests(unittest.IsolatedAsyncioTestCase):
 
             response = await get_history(
                 service="binance",
+                integration_id=None,
                 start_date=None,
                 end_date=None,
                 limit=100,
@@ -483,7 +484,15 @@ class HistoryContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["total_entries"], 2)
             self.assertEqual(
                 set(payload["entries"][0].keys()),
-                {"service", "total_usd", "assets", "accounts", "actual", "created_at"},
+                {
+                    "integration_id",
+                    "service",
+                    "total_usd",
+                    "assets",
+                    "accounts",
+                    "actual",
+                    "created_at",
+                },
             )
 
     async def test_history_chart_response_shape_is_stable(self):
@@ -519,6 +528,7 @@ class HistoryContractTests(unittest.IsolatedAsyncioTestCase):
 
             response = await get_history_chart(
                 service="binance",
+                integration_id=None,
                 start_date=now,
                 end_date=now + timedelta(hours=2),
                 interval="hour",

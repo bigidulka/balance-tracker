@@ -14,8 +14,9 @@ import unittest
 from typing import Any
 
 from bot.contracts.callbacks import ROUTE_INTEGRATION_DETAIL, ROUTE_INTEGRATIONS
+from bot.naming import build_service_name_map
+from bot.naming import dex_name as dex_label  # bot.services.integration_label was merged into bot.naming
 from bot.services.balance import parse_balances
-from bot.services.integration_label import build_service_name_map, dex_label
 from bot.services.screen_service import ScreenService
 
 EVM_ADDR  = "0xf9095877f93603d0b6c44e5a82db5dc751b34cd8"
@@ -162,13 +163,13 @@ class NewUserDEXLabelTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"{_legacy_svc(TON_ADDR)}#18", self.name_map)
 
     def test_name_map_legacy_tron_key_is_trx(self):
-        self.assertEqual(self.name_map[_legacy_svc(TRON_ADDR)], "TRX TAAJTe...oHVH")
+        self.assertEqual(self.name_map[_legacy_svc(TRON_ADDR)], dex_label(TRON_ADDR, "tron"))
 
     def test_name_map_legacy_ton_key_is_ton(self):
-        self.assertEqual(self.name_map[_legacy_svc(TON_ADDR)], "TON UQDa41...8c0Z")
+        self.assertEqual(self.name_map[_legacy_svc(TON_ADDR)], dex_label(TON_ADDR, "ton"))
 
     def test_name_map_canonical_evm_key(self):
-        self.assertEqual(self.name_map[f"evm_{lo(EVM_ADDR)}"], "EVM 0xf909...4cd8")
+        self.assertEqual(self.name_map[f"evm_{lo(EVM_ADDR)}"], dex_label(EVM_ADDR, "evm"))
 
     def test_name_map_canonical_sol_key(self):
         self.assertIn(f"sol_{lo(SOL_ADDR)}", self.name_map)
@@ -196,9 +197,9 @@ class NewUserDEXLabelTests(unittest.IsolatedAsyncioTestCase):
     def test_new_user_all_labels_correct(self):
         result = parse_balances({"services": _new_user_balance_services()})
         labels = set(_dex_labels(result["dex_wallets"], self.name_map).values())
-        self.assertIn("TRX TAAJTe...oHVH", labels)
-        self.assertIn("TON UQDa41...8c0Z", labels)
-        self.assertIn("EVM 0xf909...4cd8", labels)
+        self.assertIn(dex_label(TRON_ADDR, "tron"), labels)
+        self.assertIn(dex_label(TON_ADDR, "ton"), labels)
+        self.assertIn(dex_label(EVM_ADDR, "evm"), labels)
 
     def test_new_user_no_ton_wallet_shows_trx(self):
         result = parse_balances({"services": _new_user_balance_services()})
@@ -295,7 +296,7 @@ class NewUserFSMCreationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(r.success, r)
         p = svc.api_repo.created_payloads[0]
         self.assertEqual(p["chain"], "ethereum")
-        self.assertEqual(p["name"], "EVM 0xf909...4cd8")
+        self.assertEqual(p["name"], dex_label(EVM_ADDR, "ethereum"))
         self.assertEqual(r.next_route, ROUTE_INTEGRATION_DETAIL)
 
     async def test_sol_creates_sol_label(self):
@@ -352,7 +353,8 @@ class NewUserIntegrationsScreenTests(unittest.IsolatedAsyncioTestCase):
     async def test_keyboard_tron_button_is_trx(self):
         rendered = await self._svc().render(route=ROUTE_INTEGRATIONS, payload={}, user_id=1, rev=1)
         buttons = [b.text for row in rendered.keyboard.inline_keyboard for b in row]
-        tron_btns = [b for b in buttons if "taajte" in b.lower()]
+        # Labels abbreviate the address, so match the surviving prefix of the TRON address.
+        tron_btns = [b for b in buttons if "taajt" in b.lower()]
         self.assertTrue(len(tron_btns) > 0, f"No TRON button found. Buttons: {buttons}")
         for btn in tron_btns:
             self.assertTrue(btn.startswith("TRX"), f"TRON btn wrong prefix: {btn!r}")
