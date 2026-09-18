@@ -5,7 +5,10 @@ if [ "${PROXYCHAINS_ENABLED:-0}" != "1" ]; then
     exec "$@"
 fi
 
+# The approved egress proxy is deployment configuration: never bake the host or its
+# credentials into the image. OUTBOUND_PROXY_PORT is optional and defaults to the URL port.
 : "${OUTBOUND_PROXY_URL:?OUTBOUND_PROXY_URL is required}"
+: "${OUTBOUND_PROXY_HOST:?OUTBOUND_PROXY_HOST is required}"
 case "$OUTBOUND_PROXY_URL" in
     *"#"*|*[[:space:]]*)
         printf '%s\n' 'Invalid OUTBOUND_PROXY_URL' >&2
@@ -14,12 +17,16 @@ case "$OUTBOUND_PROXY_URL" in
 esac
 
 python_bin=${PROXYCHAINS_PYTHON_BIN:-python3}
-proxy_row=$(OUTBOUND_PROXY_URL="$OUTBOUND_PROXY_URL" "$python_bin" - <<'PY'
+proxy_row=$(OUTBOUND_PROXY_URL="$OUTBOUND_PROXY_URL" OUTBOUND_PROXY_HOST="$OUTBOUND_PROXY_HOST" \
+    OUTBOUND_PROXY_PORT="${OUTBOUND_PROXY_PORT:-}" "$python_bin" - <<'PY'
 import os
 import socket
 from urllib.parse import unquote, urlsplit
 
 url = os.environ["OUTBOUND_PROXY_URL"]
+expected_host = os.environ["OUTBOUND_PROXY_HOST"].strip().lower()
+expected_port_raw = os.environ.get("OUTBOUND_PROXY_PORT", "").strip()
+expected_port = int(expected_port_raw) if expected_port_raw else 0
 try:
     parsed = urlsplit(url)
     port = parsed.port
@@ -27,8 +34,8 @@ try:
     password = unquote(parsed.password or "")
     if (
         parsed.scheme.lower() != "http"
-        or parsed.hostname != "***REMOVED***"
-        or port != 49855
+        or (parsed.hostname or "").lower() != expected_host
+        or (expected_port and port != expected_port)
         or not username
         or not password
         or parsed.path

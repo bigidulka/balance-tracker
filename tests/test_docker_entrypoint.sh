@@ -37,7 +37,7 @@ _original_getaddrinfo = socket.getaddrinfo
 
 
 def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    if host == "***REMOVED***":
+    if host == "proxy.example.test":
         if os.environ.get("TEST_SOCKET_MODE") == "error":
             raise OSError("test resolver failure")
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.44", port))]
@@ -55,7 +55,8 @@ touch "$config" "$hosts"
 chmod 644 "$config"
 TEST_CAPTURE="$capture" TEST_REAL_PYTHON_BIN="$real_python" TEST_SITE_DIR="$tmpdir/site" \
 PATH="$tmpdir/bin:$PATH" PROXYCHAINS_ENABLED=1 \
-OUTBOUND_PROXY_URL='http://user%40name:secret%40value@***REMOVED***:49855' \
+OUTBOUND_PROXY_URL='http://user%40name:secret%40value@proxy.example.test:49855' \
+OUTBOUND_PROXY_HOST='proxy.example.test' OUTBOUND_PROXY_PORT=49855 \
 PROXYCHAINS_PYTHON_BIN="$tmpdir/bin/python3" PROXYCHAINS_CONFIG_PATH="$config" \
 PROXYCHAINS_HOSTS_FILE="$hosts" RESOLVE_HOSTS='api,redis' sh "$entrypoint" /bin/true
 
@@ -72,6 +73,7 @@ grep -qx '10.0.0.2 redis' "$hosts"
 
 if TEST_REAL_PYTHON_BIN="$real_python" TEST_SITE_DIR="$tmpdir/site" PATH="$tmpdir/bin:$PATH" \
 PROXYCHAINS_ENABLED=1 OUTBOUND_PROXY_URL='http://user:secret@proxy.test:49855' \
+OUTBOUND_PROXY_HOST='proxy.example.test' \
 PROXYCHAINS_PYTHON_BIN="$tmpdir/bin/python3" PROXYCHAINS_CONFIG_PATH="$tmpdir/invalid.conf" \
 sh "$entrypoint" /bin/true; then
     printf '%s\n' 'invalid proxy was accepted' >&2
@@ -80,7 +82,8 @@ fi
 
 if TEST_REAL_PYTHON_BIN="$real_python" TEST_SITE_DIR="$tmpdir/site" TEST_SOCKET_MODE=error \
 PATH="$tmpdir/bin:$PATH" PROXYCHAINS_ENABLED=1 \
-OUTBOUND_PROXY_URL='http://user:secret@***REMOVED***:49855' \
+OUTBOUND_PROXY_URL='http://user:secret@proxy.example.test:49855' \
+OUTBOUND_PROXY_HOST='proxy.example.test' OUTBOUND_PROXY_PORT=49855 \
 PROXYCHAINS_PYTHON_BIN="$tmpdir/bin/python3" PROXYCHAINS_CONFIG_PATH="$tmpdir/resolver-error.conf" \
 sh "$entrypoint" /bin/true; then
     printf '%s\n' 'resolver failure was accepted' >&2
