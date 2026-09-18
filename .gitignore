@@ -49,6 +49,13 @@ api_keys.json
 data/*.db
 data/*.sqlite*
 data/
+
+# Local agent work directories, scratch output and one-off dumps.
+.agents/
+.codex/
+.ralph/
+AGENTS.md
+tmp/
 nul
 tmp_okx*.js
 scripts/__pycache__/
