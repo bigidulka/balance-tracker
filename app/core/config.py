@@ -15,7 +15,7 @@ class ExchangeKeys(BaseSettings):
 class Settings(BaseSettings):
     database_url: str = Field(default="")
     database_use_sqlite: bool = Field(default=False)
-    sqlite_database_url: str = Field(default="***REMOVED***")
+    sqlite_database_url: str = Field(default="sqlite+aiosqlite:///data/balance_tracker.db")
     postgres_host: str = Field(default="postgres")
     postgres_port: int = Field(default=5432)
     postgres_db: str = Field(default="balance_tracker")

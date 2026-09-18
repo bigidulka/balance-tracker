@@ -21,7 +21,7 @@
      build:
        context: ./bots
        dockerfile: my_new_bot/Dockerfile
-     container_name: ***REMOVED***_my_new_bot
+     container_name: my_new_bot
      # ...
    ```
 

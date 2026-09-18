@@ -113,7 +113,7 @@ class BillingWalletAdminTests(unittest.IsolatedAsyncioTestCase):
             session.add(
                 TelegramIdentity(
                     telegram_user_id=6238100241,
-                    telegram_username="***REMOVED***_admin",
+                    telegram_username="test_admin",
                     telegram_first_name="Arbitron",
                     telegram_last_name="Admin",
                     telegram_full_name="Arbitron Admin",
@@ -138,11 +138,11 @@ class BillingWalletAdminTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(items[0]["active_integrations"], 1)
             self.assertEqual(items[0]["balance_usd"], 42.5)
             self.assertEqual(items[0]["telegram_user_id"], 6238100241)
-            self.assertEqual(items[0]["telegram_username"], "***REMOVED***_admin")
+            self.assertEqual(items[0]["telegram_username"], "test_admin")
 
             detail = await repo.get_user_membership_detail(user_id=user.id, organization_id=org.id)
             self.assertIsNotNone(detail)
             assert detail is not None
             self.assertEqual(detail["organization_name"], "Admin Org")
             self.assertEqual(len(detail["integrations"]), 1)
-            self.assertEqual(detail["telegram_username"], "***REMOVED***_admin")
+            self.assertEqual(detail["telegram_username"], "test_admin")

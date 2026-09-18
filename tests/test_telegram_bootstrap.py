@@ -99,7 +99,7 @@ class TelegramBootstrapTests(unittest.IsolatedAsyncioTestCase):
             payload = await telegram_bootstrap(
                 payload=SimpleNamespace(
                     telegram_user_id=6238100241,
-                    telegram_username="***REMOVED***_admin",
+                    telegram_username="test_admin",
                     telegram_first_name="Admin",
                     telegram_last_name="User",
                     telegram_full_name="Admin User",
@@ -110,18 +110,18 @@ class TelegramBootstrapTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(payload.role, "owner")
             self.assertTrue(payload.is_platform_admin)
-            self.assertEqual(payload.telegram_username, "***REMOVED***_admin")
+            self.assertEqual(payload.telegram_username, "test_admin")
             self.assertTrue(payload.organization_slug.startswith("tg-"))
 
             bootstrap = await AuthService(AuthRepository(session)).bootstrap_telegram_identity(
                 telegram_user_id=6238100241,
-                telegram_username="***REMOVED***_admin_new",
+                telegram_username="test_admin_new",
                 telegram_first_name="Admin",
                 telegram_last_name="User",
                 telegram_full_name="Admin User",
             )
             self.assertEqual(bootstrap.membership.role, "owner")
-            self.assertEqual(bootstrap.telegram_identity.telegram_username, "***REMOVED***_admin_new")
+            self.assertEqual(bootstrap.telegram_identity.telegram_username, "test_admin_new")
 
             admin_identity = IdentityContext(
                 user=bootstrap.user,

@@ -56,7 +56,7 @@ def test_signature_generation():
     
     # Create headers that would be sent with the request
     headers = {
-        'x-api-key': '***REMOVED***',
+        'x-api-key': 'test-key-placeholder',
         'x-api-sign': signature,
         'x-api-time': str(timestamp),
         'x-api-ts': str(timestamp),
@@ -135,7 +135,7 @@ def simulate_api_call():
         'url': f"https://api.debank.com{endpoint}?{param_string}",
         'method': 'GET',
         'headers': {
-            'x-api-key': '***REMOVED***',
+            'x-api-key': 'test-key-placeholder',
             'x-api-sign': signature,
             'x-api-time': str(timestamp),
             'x-api-ts': str(timestamp),

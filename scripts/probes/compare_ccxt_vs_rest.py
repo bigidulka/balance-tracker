@@ -104,7 +104,7 @@ def _load_keys() -> list[str]:
         if payload.get("apiKey"):
             active.append(exchange_id)
 
-    os.environ.setdefault("DATABASE_URL", "***REMOVED***")
+    os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///data/balance_tracker.db")
     return active
 
 

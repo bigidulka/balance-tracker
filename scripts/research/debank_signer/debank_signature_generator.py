@@ -144,7 +144,7 @@ class DeBankSignatureGenerator:
         
         # Return all required headers
         headers = {
-            'x-api-key': '***REMOVED***',  # Default key found in analysis
+            'x-api-key': 'placeholder-key-from-analysis',  # Default key found in analysis
             'x-api-sign': signature,
             'x-api-time': str(timestamp),
             'x-api-ts': str(timestamp),

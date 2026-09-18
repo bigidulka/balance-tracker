@@ -132,7 +132,7 @@ docker compose up --build
 ```
 
 По умолчанию `DATABASE_USE_SQLITE=false`; для локального запуска без PostgreSQL включите
-SQLite (`DATABASE_USE_SQLITE=true`, `SQLITE_DATABASE_URL=***REMOVED***`).
+SQLite (`DATABASE_USE_SQLITE=true`, `SQLITE_DATABASE_URL=sqlite+aiosqlite:///data/balance_tracker.db`).
 API слушает `127.0.0.1:8001`, схема — `/docs`.
 
 ### Тесты
