@@ -11,7 +11,7 @@ class DeBankAnalyzer:
     def load_analysis(self):
         """Load the analysis results from the JSON file"""
         try:
-            with open('debank_analysis_463452c3.json', 'r') as f:
+            with open('artifact.json', 'r') as f:
                 self.findings = json.load(f)
             print("✓ Analysis data loaded successfully")
             return True
