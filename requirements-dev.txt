@@ -9,3 +9,6 @@
 -r requirements.txt
 
 pytest>=8.3,<10
+
+# The suite stubs HTTP transports but imports the redis client for cache fixtures.
+redis>=5,<7
