@@ -44,6 +44,10 @@ env/
 .venv/
 
 api_keys.json
+
+# Local runtime artifacts. data/tariffs.json stays tracked on purpose.
+data/*.db
+data/*.sqlite*
 data/
 nul
 tmp_okx*.js

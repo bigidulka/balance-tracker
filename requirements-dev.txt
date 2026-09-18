@@ -1,0 +1,11 @@
+# Development and test dependencies.
+#
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#   pytest
+#
+# Runtime services (PostgreSQL, Redis) are optional for the test suite: it runs against
+# in-memory SQLite and stubs every exchange/HTTP call.
+-r requirements.txt
+
+pytest>=8.3,<10
