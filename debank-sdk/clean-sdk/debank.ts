@@ -156,7 +156,7 @@ export interface TxPage {
 // ─── SDK ────────────────────────────────────────────────────────────
 
 const BASE = "https://api.debank.com";
-const API_KEY = "***REMOVED***";
+const API_KEY = "00000000-0000-0000-0000-000000000000";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
