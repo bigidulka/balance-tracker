@@ -181,7 +181,11 @@ class BitmartTickerFallbackTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(get_exchange_config=lambda *_: api_config, proxy_url=None),
         ):
             with patch.object(ccxt_manager_module.aiohttp, "ClientSession", return_value=session_cm):
-                with patch.object(ccxt_manager_module.ccxtpro, "bitmart", return_value=exchange):
+                with patch.object(
+                    ccxt_manager_module,
+                    "_ccxt_exchange_class",
+                    return_value=lambda config: exchange,
+                ):
                     balance = await manager._fetch_bitmart_balance_direct()
 
         after = ccxt_manager_module.metrics_service.snapshot().get(
@@ -226,7 +230,11 @@ class BitmartTickerFallbackTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(get_exchange_config=lambda *_: api_config, proxy_url=None),
         ):
             with patch.object(ccxt_manager_module.aiohttp, "ClientSession", return_value=session_cm):
-                with patch.object(ccxt_manager_module.ccxtpro, "bitmart", return_value=exchange):
+                with patch.object(
+                    ccxt_manager_module,
+                    "_ccxt_exchange_class",
+                    return_value=lambda config: exchange,
+                ):
                     balance = await manager._fetch_bitmart_balance_direct()
 
         self.assertTrue(balance.actual)

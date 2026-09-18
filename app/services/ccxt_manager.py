@@ -13,6 +13,7 @@ from time import monotonic
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
+import ccxt.async_support as ccxt_async
 import ccxt.pro as ccxtpro
 
 from app.core.http import build_proxy_url, is_http_proxy, is_socks_proxy, request_proxy_kwargs, session_kwargs
@@ -33,6 +34,21 @@ from app.services.metrics_service import metrics_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# CCXT renames and drops exchange ids between releases (gateio -> gate, and some REST-only
+# venues have no Pro/WebSocket class at all). Resolve an exchange class across both
+# namespaces so a missing class degrades one integration instead of failing the request.
+_CCXT_EXCHANGE_ALIASES = {"gateio": "gate"}
+
+
+def _ccxt_exchange_class(exchange_id: str):
+    """Return an exchange class from CCXT Pro or the REST async namespace, if available."""
+
+    for candidate in (exchange_id, _CCXT_EXCHANGE_ALIASES.get(exchange_id, exchange_id)):
+        exchange_class = getattr(ccxtpro, candidate, None) or getattr(ccxt_async, candidate, None)
+        if exchange_class is not None:
+            return exchange_class
+    return None
 
 
 # Полностью отключаем debug output от ccxt и aiohttp
@@ -543,15 +559,22 @@ class CCXTManager:
                 else:
                     exchange_config["aiohttp_proxy"] = proxy_url
 
-            temp_exchange = ccxtpro.bitmart(exchange_config)
-            try:
-                tickers = await temp_exchange.fetch_tickers()
-            except:
-                pass
-            finally:
-                await temp_exchange.close()
-        except:
-            pass
+            exchange_class = _ccxt_exchange_class("bitmart")
+            if exchange_class is None:
+                logger.warning(
+                    "BitMart tickers unavailable: the installed CCXT exposes no bitmart "
+                    "class, so non-stable assets stay unvalued"
+                )
+            else:
+                temp_exchange = exchange_class(exchange_config)
+                try:
+                    tickers = await temp_exchange.fetch_tickers()
+                except Exception as exc:
+                    logger.warning("BitMart tickers fetch failed: %s", exc)
+                finally:
+                    await temp_exchange.close()
+        except Exception as exc:
+            logger.warning("BitMart ticker bootstrap failed: %s", exc)
 
         # Обрабатываем балансы
         assets: list[AssetSchema] = []
@@ -617,7 +640,7 @@ class CCXTManager:
                 if not config.get("apiKey"):
                     raise ValueError(f"No API key configured for {exchange_id}")
 
-                exchange_class = getattr(ccxtpro, exchange_id, None)
+                exchange_class = _ccxt_exchange_class(exchange_id)
                 if exchange_class is None:
                     raise ValueError(f"Exchange {exchange_id} not supported by CCXT")
 
