@@ -6,7 +6,7 @@ import sys
 
 # Add parent dir to path
 sys.path.insert(0, os.path.abspath('.'))
-from tests.debank_playwright_signer import debank_signer
+from scripts.research.debank_signer.debank_playwright_signer import debank_signer
 
 async def test_balance():
     print("Testing balance fetch with Playwright signer...")
